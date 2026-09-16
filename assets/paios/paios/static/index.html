@@ -1,0 +1,786 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>PAIOS · 个人 AI 作业系统</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: "Microsoft YaHei", system-ui, sans-serif; background: #0f1420; color: #d8dee9; font-size: 14px; }
+  header { display: flex; align-items: center; gap: 24px; padding: 12px 20px; background: #161d2e; border-bottom: 1px solid #232c42; }
+  header h1 { font-size: 17px; color: #7eb8ff; font-weight: 600; }
+  .tabs { display: flex; gap: 4px; }
+  .tab { padding: 7px 18px; border-radius: 8px 8px 0 0; cursor: pointer; color: #8a94a8; border: 1px solid transparent; border-bottom: none; }
+  .tab.on { background: #0f1420; color: #e8edf5; border-color: #232c42; font-weight: 600; }
+  .badge { background: #e5484d; color: #fff; border-radius: 9px; padding: 1px 7px; font-size: 11px; margin-left: 5px; }
+  main { padding: 16px 20px; max-width: 1200px; margin: 0 auto; }
+  .bar { display: flex; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; align-items: center; }
+  input[type=text], select { background: #1a2234; border: 1px solid #2c3a5a; color: #d8dee9; padding: 7px 12px; border-radius: 6px; outline: none; }
+  input[type=text]:focus { border-color: #4a7dd6; }
+  input[type=text] { min-width: 320px; }
+  button { background: #2c5aa8; color: #fff; border: none; padding: 7px 14px; border-radius: 6px; cursor: pointer; }
+  button:hover { background: #3a6ec4; }
+  button.ghost { background: #232c42; color: #9fb0cc; }
+  button.danger { background: #8a3236; }
+  button.ok { background: #2f7d4f; }
+  .card { background: #161d2e; border: 1px solid #232c42; border-radius: 10px; padding: 12px 16px; margin-bottom: 10px; }
+  .card:hover { border-color: #33507e; }
+  .row { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
+  .t { font-weight: 600; color: #e8edf5; cursor: pointer; }
+  .t:hover { color: #7eb8ff; }
+  .meta { color: #76839c; font-size: 12px; white-space: nowrap; }
+  .desc { color: #98a5bd; font-size: 13px; margin-top: 5px; }
+  .tag { display: inline-block; background: #1e2a44; color: #7eb8ff; border-radius: 4px; padding: 1px 7px; font-size: 11px; margin-right: 4px; }
+  .st-active { color: #57c983; } .st-draft { color: #e5b454; } .st-deprecated { color: #8a94a8; text-decoration: line-through; }
+  pre { background: #101624; border: 1px solid #232c42; border-radius: 8px; padding: 12px; white-space: pre-wrap; word-break: break-word; font-size: 13px; line-height: 1.6; }
+  .empty { text-align: center; color: #5d6a83; padding: 40px; }
+  .hidden { display: none; }
+  .stat { color: #76839c; font-size: 12px; margin-left: auto; }
+  a { color: #7eb8ff; }
+  table.stable { width: 100%; border-collapse: collapse; }
+  .stable th { text-align: left; color: #76839c; font-size: 12px; padding: 6px 8px; border-bottom: 1px solid #2c3a5a; font-weight: 600; }
+  .stable td { padding: 7px 8px; border-bottom: 1px solid #1a2234; vertical-align: top; font-size: 13px; }
+  .stable tr.srow:hover td { background: #161d2e; }
+  .ghead td { padding: 12px 8px 5px; color: #7eb8ff; font-weight: 600; font-size: 13px; border-bottom: 1px solid #2c3a5a; }
+  .cell-clip { max-width: 340px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .modal-mask { position: fixed; inset: 0; background: rgba(5,8,16,.65); display: flex; align-items: center; justify-content: center; z-index: 50; }
+  .modal-mask.hidden { display: none; }  /* 同为单类选择器，必须显式压过上面的 display:flex */
+  .modal { background: #161d2e; border: 1px solid #2c3a5a; border-radius: 12px; padding: 18px 20px; width: min(680px, 92vw); }
+  .modal h3 { font-size: 15px; color: #7eb8ff; margin-bottom: 8px; }
+  .modal textarea { width: 100%; min-height: 200px; background: #101624; color: #d8dee9; border: 1px solid #2c3a5a; border-radius: 8px; padding: 10px; font: 13px/1.6 Consolas, monospace; resize: vertical; outline: none; }
+  .modal textarea:focus { border-color: #4a7dd6; }
+  .modal .mfoot { display: flex; gap: 10px; align-items: center; margin-top: 12px; }
+  .modal .mmeta { color: #76839c; font-size: 12px; margin-right: auto; }
+</style>
+</head>
+<body>
+<header>
+  <h1>⚙ PAIOS</h1>
+  <div class="tabs">
+    <div class="tab on" data-t="sessions">会话</div>
+    <div class="tab" data-t="atoms">知识原子<span class="badge hidden" id="abadge"></span></div>
+    <div class="tab" data-t="cands">候选沉淀<span class="badge hidden" id="cbadge"></span></div>
+  </div>
+  <div class="stat" id="stat"></div>
+  <span class="badge hidden" id="pushwarn" style="cursor:help;margin-left:8px"></span>
+</header>
+<main>
+  <div class="modal-mask hidden" id="clusterModal">
+    <div class="modal">
+      <h3>⬆ 升级为全局防范规则 · 升级前先凝练</h3>
+      <div class="meta" style="margin-bottom:8px">成员：<span id="cmIds"></span></div>
+      <textarea id="cmText" spellcheck="false" oninput="updateCmCount()"></textarea>
+      <div class="mfoot">
+        <span class="mmeta" id="cmCount"></span>
+        <span class="mmeta">建议 2~4 行，只留跨场景通用纪律，删场景私货</span>
+        <button class="ok" onclick="confirmCluster()">✓ 确认写入</button>
+        <button class="ghost" onclick="closeClusterModal()">取消</button>
+      </div>
+    </div>
+  </div>
+  <!-- 会话 -->
+  <section id="v-sessions">
+    <div class="bar">
+      <input type="text" id="sq" placeholder="搜索：标题 / 摘要 / 项目 / 文件路径（多词空格分隔）">
+      <select id="sstate" onchange="loadSessions()">
+        <option value="active">当前会话</option>
+        <option value="archived">📦 已归档</option>
+        <option value="trash">🗑 垃圾箱</option>
+      </select>
+      <select id="stype" onchange="loadSessions()">
+        <option value="">全部类型</option>
+        <option>桌面应用</option>
+        <option>Web应用</option>
+        <option>工具/脚本</option>
+        <option>文档/资料</option>
+        <option>其他</option>
+        <option>未归类</option>
+      </select>
+      <select id="sps" onchange="loadSessions()">
+        <option value="">全部项目状态</option>
+        <option>可运行</option>
+        <option>开发中</option>
+        <option>草稿</option>
+      </select>
+      <select id="sorder" onchange="loadSessions()">
+        <option value="updated">最近更新优先</option>
+        <option value="updated_asc">最早更新优先</option>
+        <option value="created">最近创建优先</option>
+        <option value="created_asc">最早创建优先</option>
+      </select>
+      <label class="meta" style="display:flex;gap:4px;align-items:center;cursor:pointer" title="勾选后取消应用类型分组，全部会话按所选时间序平铺">
+        <input type="checkbox" id="sflat" onchange="loadSessions()">平铺不分组</label>
+      <select id="sproj"><option value="">全部项目</option></select>
+      <button onclick="loadSessions()">搜索</button>
+      <button class="ghost" onclick="clearSessionFilters()">✕ 清除筛选</button>
+    </div>
+    <div class="bar" id="sbatchbar">
+      <button class="ghost" onclick="pickAllS(true)">全选</button>
+      <button class="ghost" onclick="pickAllS(false)">取消全选</button>
+      <span id="sbatchbtns" style="display:inline-flex;gap:8px"></span>
+      <span class="meta" id="spickinfo">勾选会话后可批量操作</span>
+    </div>
+    <div id="slist"></div>
+  </section>
+
+  <!-- 项目页已取消：项目级能力（状态手改/打开文件夹/原子存量）并入会话页 -->
+
+  <!-- 原子 -->
+  <section id="v-atoms" class="hidden">
+    <div class="bar">
+      <input type="text" id="aq" placeholder="检索原子（多词 AND）">
+      <select id="aproj"><option value="">全部项目</option></select>
+      <select id="ast">
+        <option value="">全部状态</option>
+        <option value="active">在役 active</option>
+        <option value="draft">待审草稿 draft</option>
+        <option value="deprecated">已废弃</option>
+      </select>
+      <button onclick="loadAtoms()">检索</button>
+      <button class="ghost" onclick="$('#aq').value=''; $('#aproj').value=''; $('#ast').value=''; loadAtoms()">✕ 清除筛选</button>
+      <button class="ghost" onclick="loadAtoms('')">刷新</button>
+    </div>
+    <div class="bar" id="batchbar">
+      <button class="ghost" onclick="pickAll(true)">全选</button>
+      <button class="ghost" onclick="pickAll(false)">取消全选</button>
+      <button class="ok" onclick="batchStatus('active')">✓ 转正所选</button>
+      <button class="danger" onclick="batchStatus('deprecated')">✕ 废弃所选</button>
+      <button class="ghost" onclick="batchStatus('active', true)">♻ 恢复所选</button>
+      <button class="danger" onclick="batchDelete()">🗑 彻底删除所选（仅废弃）</button>
+      <span class="meta" id="pickinfo">勾选后可批量操作</span>
+    </div>
+    <div class="bar">
+      <button class="ghost" onclick="toggleClusters()">🧬 多场景同族高发区</button>
+      <span class="meta">自动提炼：family 链接 + 共有标签聚类，≥2 个原子成组；多场景反复发生的问题可一键升级为全局防范规则</span>
+    </div>
+    <div id="clusterArea" class="hidden"></div>
+    <div id="alist"></div>
+  </section>
+
+  <!-- 候选 -->
+  <section id="v-cands" class="hidden">
+    <div class="bar">
+      <select id="csort" onchange="loadCands()">
+        <option value="pain">按痛点分排序（最痛在前）</option>
+        <option value="time">按最近更新排序</option>
+      </select>
+      <button class="ghost" onclick="pickAllCands(true)">全选</button>
+      <button class="ok" onclick="batchDoneCands()">✓ 已处理所选</button>
+      <span class="desc">痛点分 = 同文件返工×12 + 文件操作×2 + 改动行÷40 + 鏖战时长×6 + 消息÷20。分高的优先处理。</span>
+    </div>
+    <div id="clist"></div>
+  </section>
+</main>
+
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => (s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const fmtT = ms => ms ? new Date(ms).toLocaleString('zh-CN', {month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit'}) : '?';
+
+// ---------- tabs ----------
+let curTab = 'sessions';
+document.querySelectorAll('.tab').forEach(t => t.onclick = () => {
+  document.querySelectorAll('.tab').forEach(x => x.classList.remove('on'));
+  t.classList.add('on'); curTab = t.dataset.t;
+  ['sessions','atoms','cands'].forEach(v => $('#v-'+v).classList.toggle('hidden', v !== curTab));
+  if (curTab === 'sessions') loadSessions();
+  if (curTab === 'atoms') loadAtoms();
+  if (curTab === 'cands') loadCands();
+});
+
+async function api(path, opts) { const r = await fetch(path, opts); return r.json(); }
+
+// ---------- stats ----------
+async function loadStats() {
+  try {
+    const s = await api('/api/stats');
+    $('#stat').textContent = `${s.total} 会话已归档 ｜ 📦 ${s.archived} ｜ 🗑 ${s.trashed}`;
+    const c = await api('/api/candidates?limit=99');
+    const b = $('#cbadge');
+    b.textContent = c.length; b.classList.toggle('hidden', !c.length);
+    // 原子库推送状态：失败便签存在 → 顶栏常驻警示（悬停看详情，随下次会话自动续推）
+    const w = $('#pushwarn');
+    if (s.push_fail) {
+      w.classList.remove('hidden');
+      w.textContent = '⚠ 推送失败(' + s.push_fail.split('|')[0].trim() + ')';
+      w.title = '最近失败：' + s.push_fail + '（本地已提交安全，下次会话结束自动续推）';
+    } else { w.classList.add('hidden'); }
+  } catch (e) {}
+}
+
+// ---------- sessions ----------
+const SESS_BTNS = {
+  active: `<button class="ghost" onclick="sessBatch('archive')">📦 归档所选</button>
+           <button class="danger" onclick="sessBatch('trash')">🗑 移入垃圾箱</button>`,
+  archived: `<button class="ghost" onclick="sessBatch('unarchive')">↩ 取消归档</button>
+             <button class="danger" onclick="sessBatch('trash')">🗑 移入垃圾箱</button>`,
+  trash: `<button class="ok" onclick="sessBatch('restore')">♻ 恢复所选</button>
+          <button class="danger" onclick="sessBatch('delete')">🔥 彻底删除所选</button>`
+};
+
+async function loadSessions() {
+  const q = $('#sq').value.trim(), proj = $('#sproj').value, state = $('#sstate').value;
+  let rows = await api(`/api/sessions?q=${encodeURIComponent(q)}&project=${encodeURIComponent(proj)}&state=${state}&order=${$('#sorder').value}&limit=200`);
+  if (!$('#sproj').options.length > 1) {}
+  const projs = [...new Set(rows.map(r => r.project_key))].sort();
+  const sel = $('#sproj');
+  if (sel.dataset.loaded !== '1') {
+    projs.forEach(p => { const o = document.createElement('option'); o.value = o.textContent = p; sel.appendChild(o); });
+    sel.dataset.loaded = '1';
+  }
+  $('#sbatchbtns').innerHTML = SESS_BTNS[state] || '';
+  // 应用类型 / 项目状态筛选（客户端过滤）
+  const tf = $('#stype').value;
+  if (tf) rows = rows.filter(r => r.app_type === tf);
+  const sf = $('#sps').value;
+  if (sf) rows = rows.filter(r => r.proj_status === sf);
+  // 列表底部：归档/垃圾箱入口
+  let footer = '';
+  if (state === 'active') {
+    const s = await api('/api/stats');
+    if (s.archived) footer = `<div class="card" style="text-align:center;cursor:pointer;color:#8a94a8" onclick="$('#sstate').value='archived';loadSessions()">📦 已归档 ${s.archived} 条 · 点开查看</div>`;
+  } else if (state === 'archived') {
+    const s = await api('/api/stats');
+    footer = `<div class="card" style="text-align:center;cursor:pointer;color:#8a94a8" onclick="$('#sstate').value='active';loadSessions()">↩ 返回当前会话</div>
+      <div class="card" style="text-align:center;cursor:pointer;color:#8a94a8" onclick="$('#sstate').value='trash';loadSessions()">🗑 垃圾箱 ${s.trashed} 条 · 点开查看</div>`;
+  }
+  $('#slist').innerHTML = (rows.length ? sessTable(rows, state, $('#sflat').checked)
+    : '<div class="empty">' + (state === 'trash' ? '垃圾箱为空' : state === 'archived' ? '还没有归档的会话' : '无匹配会话') + '</div>') + footer;
+}
+
+function sessTable(rows, state, flat) {
+  // 按应用类型分组展示（大类，可点击折叠），组内保持排序；flat=平铺不分组
+  const order = ['桌面应用', 'Web应用', '工具/脚本', '文档/资料', '其他', '未归类'];
+  const groups = {};
+  if (flat) {
+    groups[''] = rows;
+  } else {
+    rows.forEach(r => { (groups[r.app_type] = groups[r.app_type] || []).push(r); });
+  }
+  const keys = flat ? [''] : Object.keys(groups).sort((a, b) => order.indexOf(a) - order.indexOf(b));
+  let gi = 0;
+  let html = `<table class="stable"><thead><tr>
+    <th style="width:26px"></th><th>会话</th><th>项目</th><th>原子</th><th>备注</th><th>📁 文件</th><th>💬 消息</th><th>时间</th><th></th>
+  </tr></thead>`;
+  for (const k of keys) {
+    const gid = 'sg-' + gi++;
+    if (!flat) {
+      html += `<tr class="ghead" style="cursor:pointer" onclick="toggleGrp('${gid}',this)" title="点击折叠/展开">
+      <td colspan="9"><span class="garr">▾</span> ▍${esc(k)}（${groups[k].length}）</td></tr>`;
+    } else {
+      html += `<tr class="ghead"><td colspan="9">🕐 按时间平铺（${rows.length} 条，${$('#sorder').selectedOptions[0].textContent}）</td></tr>`;
+    }
+    for (const r of groups[k]) {
+      const sid = r.session_id, sd = 'sd-' + sid.slice(-8);
+      html += `<tr class="srow ${gid}">
+        <td><input type="checkbox" class="spick" value="${sid}" onchange="updateSPickInfo()"></td>
+        <td><span class="t cell-clip" style="display:inline-block" onclick="toggleDetail('${sd}')" title="${esc(r.title)}">${esc(r.title)}</span></td>
+        <td class="meta cell-clip" style="max-width:130px"><span style="cursor:pointer" onclick="gotoProject('${esc(r.project_key)}')" title="点击筛选该项目">${esc(r.project_key)}</span></td>
+        <td class="meta" style="white-space:nowrap;cursor:pointer" title="点击查看该项目的知识原子" onclick="gotoAtoms('${esc(r.project_key)}')">🧠${r.proj_atoms || 0}</td>
+        <td class="meta" style="max-width:150px"><span class="cell-clip" style="display:inline-block;cursor:text" data-sid="${sid}" data-raw="${esc(r.notes)}" onclick="editNote(this)" title="${esc(r.notes)}">${r.notes ? esc(r.notes) : '<span style="color:#3d4a63">＋</span>'}</span></td>
+        <td class="meta" style="white-space:nowrap" title="文件操作次数">📁${r.n_file_ops}</td>
+        <td class="meta" style="white-space:nowrap" title="消息数">💬${r.n_messages}</td>
+        <td class="meta" style="white-space:nowrap">${fmtT(r.t_updated)}</td>
+        <td><button class="ghost" style="padding:2px 6px;font-size:11px" onclick="copySid(this,'${sid}')">复制会话id</button></td>
+      </tr>
+      <tr class="hidden ${gid}" id="${sd}"><td colspan="9"><div class="desc" style="padding:4px 8px 10px">${sessDetail(r, state)}</div></td></tr>`;
+    }
+  }
+  return html + '</table>';
+}
+
+function toggleGrp(gid, tr) {
+  const els = document.querySelectorAll('.' + gid);
+  const hide = !(els[0] && els[0].classList.contains('hidden'));
+  els.forEach(el => el.classList.toggle('hidden', hide));
+  tr.querySelector('.garr').textContent = hide ? '▸' : '▾';
+}
+
+function sessDetail(r, state) {
+  const sid = r.session_id;
+  const stateBtns = {
+    active: `<button class="ghost" onclick="sessBatchOne('archive','${sid}')">📦 归档</button>
+             <button class="danger" onclick="sessBatchOne('trash','${sid}')">🗑 垃圾箱</button>`,
+    archived: `<button class="ghost" onclick="sessBatchOne('unarchive','${sid}')">↩ 取消归档</button>
+               <button class="danger" onclick="sessBatchOne('trash','${sid}')">🗑 垃圾箱</button>`,
+    trash: `<button class="ok" onclick="sessBatchOne('restore','${sid}')">♻ 恢复</button>
+            <button class="danger" onclick="sessBatchOne('delete','${sid}')">🔥 彻底删除</button>`
+  }[state] || '';
+  // 项目状态手改（原项目页能力）：自动评分不准可在此覆盖
+  let stSel = '';
+  if (r.project_key && r.project_key !== '未归类') {
+    const cur = r.proj_status || '';
+    const manual = r.proj_status_src === 'manual';
+    stSel = `<select style="font-size:12px;padding:2px 6px" data-key="${esc(r.project_key)}"
+              onchange="setPStatus(this)" title="项目状态：自动评分不准可手动改，改后同步不再覆盖">
+      <option value=""${manual ? '' : ' selected'}>⏾ 自动：${cur || '未评估'}</option>` +
+      ['可运行', '开发中', '草稿'].map(s =>
+        `<option value="${s}"${cur === s && manual ? ' selected' : ''}>${s}</option>`).join('') +
+      `</select>`;
+  }
+  // 会话目录优先（这才是会话真正干活的地方）；项目文件夹作补充
+  const dirLine = r.directory
+    ? `<div>📂 会话目录：${esc(r.directory)} <button class="ghost" style="padding:2px 8px;font-size:12px" data-openpath="${esc(r.directory)}">打开</button></div>` : '';
+  let projLine = '';
+  if (r.project_path && r.project_path !== r.directory) {
+    projLine = r.folder_exists
+      ? `<div>📁 项目文件夹：${esc(r.project_path)} <button class="ghost" style="padding:2px 8px;font-size:12px" data-openpath="${esc(r.project_path)}">打开</button></div>`
+      : `<div>📁 ${esc(r.project_path)} ⚠️ 已不存在 <button class="ghost" style="padding:2px 8px;font-size:12px" onclick="relProject('${sid}')">重新关联</button></div>`;
+  } else if (!r.directory) {
+    projLine = `<div>📁 未关联项目文件夹 <button class="ghost" style="padding:2px 8px;font-size:12px" onclick="relProject('${sid}')">关联项目文件夹</button></div>`;
+  }
+  return `${r.summary ? `<div>📝 ${esc(r.summary)}</div>` : ''}${projLine}${dirLine}
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:4px 0">
+      ${stSel}
+      <span>${r.project_desc ? '📌 ' + esc(r.project_desc) : ''}</span>
+      <span>${r.project_maturity ? '📊 ' + esc(r.project_maturity) : ''}</span>
+    </div>
+    <div style="margin-top:6px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <a href="/api/export?session_id=${sid}">导出全文 Markdown</a>
+      <span style="cursor:pointer" onclick="extractPrompt('${sid}')">复制提炼提示词</span>
+      ${stateBtns}
+    </div>`;
+}
+
+function copySid(btn, sid) {
+  navigator.clipboard.writeText(sid).then(() => {
+    const old = btn.textContent;
+    btn.textContent = '✓ 已复制';
+    setTimeout(() => btn.textContent = old, 1200);
+  });
+}
+
+// 备注就地编辑：点击出现输入框，Enter/点外部保存（POST /api/note），Esc 取消
+function editNote(el) {
+  if (el.querySelector('input')) return;
+  const old = el.dataset.raw || '';
+  el.innerHTML = `<input type="text" value="${esc(old)}" style="width:150px;font-size:12px;padding:2px 6px">`;
+  const inp = el.querySelector('input');
+  inp.focus();
+  inp.onblur = () => saveNote(el, inp.value.trim(), old);
+  inp.onkeydown = e => {
+    if (e.key === 'Enter') inp.blur();
+    if (e.key === 'Escape') { inp.onblur = null; renderNote(el, old); }
+  };
+}
+
+async function saveNote(el, val, old) {
+  if (val !== old) {
+    await api('/api/note', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({session_id: el.dataset.sid, notes: val})});
+  }
+  renderNote(el, val);
+}
+
+function renderNote(el, v) {
+  el.dataset.raw = v;
+  el.title = v;
+  el.innerHTML = v ? esc(v) : '<span style="color:#3d4a63">＋</span>';
+}
+
+// 路径按钮统一走 data-openpath（内联 onclick 的 JS 字符串会吃掉 Windows 反斜杠，导致打开根目录）
+document.addEventListener('click', e => {
+  const el = e.target.closest('[data-openpath]');
+  if (el) api('/api/open_folder?path=' + encodeURIComponent(el.dataset.openpath));
+});
+
+function pickAllS(on) {
+  // 已折叠（隐藏行）的会话不参与全选
+  document.querySelectorAll('.spick').forEach(c => {
+    if (!c.closest('tr').classList.contains('hidden')) c.checked = on;
+  });
+  updateSPickInfo();
+}
+function updateSPickInfo() {
+  const n = document.querySelectorAll('.spick:checked').length;
+  $('#spickinfo').textContent = n ? `已勾选 ${n} 条` : '勾选会话后可批量操作';
+}
+
+async function sessBatch(op) {
+  const ids = [...document.querySelectorAll('.spick:checked')].map(c => c.value);
+  if (!ids.length) { alert('先勾选会话'); return; }
+  await doSessBatch(op, ids);
+}
+
+async function sessBatchOne(op, sid) { await doSessBatch(op, [sid]); }
+
+async function doSessBatch(op, ids) {
+  if (op === 'delete' && !confirm(`彻底删除所选 ${ids.length} 条会话的索引记录？\n仅从 PAIOS 记忆基座移除（ZCode 原库不动），删除后同步不再回灌，不可恢复。`)) return;
+  if (op === 'trash' && !confirm(`把所选 ${ids.length} 条会话移入垃圾箱？可随时恢复。`)) return;
+  const r = await api('/api/sessions_batch', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ids, op})});
+  if (!r.ok) { alert('失败：' + JSON.stringify(r.result || r)); return; }
+  if (op === 'delete' && (r.errors || []).length) alert('已删除 ' + r.deleted.length + ' 条；跳过: ' + r.errors.join('; '));
+  updateSPickInfo();
+  loadSessions(); loadStats();
+}
+
+function relProject(sid) {
+  const p = prompt('输入项目文件夹完整路径（会话将关联到该文件夹，项目名取末级目录名）：');
+  if (!p) return;
+  const key = p.replace(/[\\/]+$/, '').split(/[\\/]/).pop();
+  api('/api/reassign', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({session_id: sid, project_key: key, project_path: p})})
+    .then(r => { if (!r.ok) alert('失败：' + JSON.stringify(r)); loadSessions(); });
+}
+
+function toggleDetail(id) { document.getElementById(id)?.classList.toggle('hidden'); }
+
+function clearSessionFilters() {
+  $('#sq').value = '';
+  $('#sproj').value = '';
+  $('#stype').value = '';
+  $('#sps').value = '';
+  $('#sflat').checked = false;
+  $('#sstate').value = 'active';
+  loadSessions();
+}
+
+function extractPrompt(sid) {
+  const p = `请把这个 ZCode 会话提炼为经验原子。用 paios_get_session_md 工具读取会话 ${sid} 的原文，按 7 字段（任务背景/人的判断/判断理由/AI错误/修正方案/最终结果/适用边界）提炼 1~N 条，用 paios_save_atom 存为草稿。`;
+  navigator.clipboard.writeText(p);
+}
+
+// ---------- projects（项目页已取消，仅保留会话页用到的项目级操作） ----------
+async function setPStatus(sel) {
+  const r = await api('/api/project_status', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({project_key: sel.dataset.key, status: sel.value})});
+  if (!r.ok) alert('失败：' + JSON.stringify(r));
+  loadSessions();
+}
+
+function gotoProject(p) { $('#sproj').value = p; loadSessions(); }
+
+function gotoAtoms(p) {
+  // 从会话页跳知识原子页，并按项目过滤
+  document.querySelectorAll('.tab').forEach(x => x.classList.toggle('on', x.dataset.t === 'atoms'));
+  ['sessions', 'atoms', 'cands'].forEach(v => $('#v-' + v).classList.toggle('hidden', v !== 'atoms'));
+  curTab = 'atoms';
+  const sel = $('#aproj');
+  if (![...sel.options].some(o => o.value === p)) {
+    const o = document.createElement('option'); o.value = o.textContent = p; sel.appendChild(o);
+  }
+  sel.value = p;
+  loadAtoms();
+}
+
+// ---------- atoms ----------
+async function loadAtoms() {
+  const q = $('#aq').value.trim(), st = $('#ast').value;
+  const proj = $('#aproj').value;
+  let rows = await api(`/api/atoms?q=${encodeURIComponent(q)}&status=${st}`);
+  const sel = $('#aproj');
+  const cur = proj;
+  const projs = [...new Set(rows.map(r => r.project).filter(Boolean))].sort();
+  sel.innerHTML = '<option value="">全部项目</option>' +
+    projs.map(p => `<option value="${esc(p)}"${p === cur ? ' selected' : ''}>${esc(p)}</option>`).join('');
+  if (cur) rows = rows.filter(r => r.project === cur);
+  $('#alist').innerHTML = rows.length ? rows.map(a => `
+    <div class="card">
+      <div class="row">
+        <span class="t" onclick="atomDetail('${a.id}')">${a.id} ${esc(a.title)}</span>
+        <span class="meta"><span class="st-${a.status}">${a.status}</span> ｜ ${esc(a.type)} ｜ ${a.date} ｜ ${esc(a.project || '-')}</span>
+      </div>
+      <div class="desc">${esc(a.one_liner)}</div>
+      ${(a.family && a.family.length) ? `<div class="desc">🧬 同族：${a.family.map(f => `<span class="tag">${esc(f)}</span>`).join(' ')}${a.family_note ? ' ｜ ' + esc(a.family_note) : ''}</div>` : ''}
+      ${a.merged && a.merged.length ? `<div class="desc">⧉ 已并入：${a.merged.map(f => `<span class="tag">${esc(f)}</span>`).join(' ')}</div>` : ''}
+      ${a.tags.length ? `<div class="desc">${a.tags.map(t => `<span class="tag">${esc(t)}</span>`).join('')}</div>` : ''}
+      <div class="desc" style="display:flex;gap:8px;align-items:center;margin-top:8px">
+        <input type="checkbox" class="pick" value="${a.id}" onchange="updatePickInfo()">
+        ${a.status === 'draft' ? `
+          <button class="ok" onclick="setStatus('${a.id}','active')">✓ 转正</button>
+          <button class="danger" onclick="setStatus('${a.id}','deprecated')">✕ 丢弃</button>` : ''}
+        ${a.status === 'active' ? (a.rule === 'global'
+          ? `<span class="tag">📌 已晋升全局规则</span><button class="ghost" onclick="promoteRule('${a.id}', false)">取消晋升</button>`
+          : `<button class="ghost" onclick="promoteRule('${a.id}', true)">⬆ 晋升全局规则</button>`) : ''}
+        ${a.status === 'active' ? `<button class="ghost" onclick="setStatus('${a.id}','deprecated')">标记废弃</button>` : ''}
+        ${a.status === 'deprecated' ? `<button class="ghost" onclick="setStatus('${a.id}','active')">♻ 恢复在役</button>
+          <button class="danger" onclick="deleteOne('${a.id}')">🗑 彻底删除</button>` : ''}
+        <button class="ghost" onclick="findSim('${a.id}')">🔍 找相似</button>
+        ${a.status === 'draft' ? `<button class="ghost" onclick="atomDetail('${a.id}')">查看全文</button>` : ''}
+      </div>
+      <pre class="hidden" id="sim-${a.id}"></pre>
+      <div class="desc hidden" id="ad-${a.id}">
+        <pre id="ab-${a.id}">加载中…</pre>
+        ${a.status === 'active' ? `<button class="ghost" onclick="setStatus('${a.id}','deprecated')">标记废弃</button>`
+        : a.status === 'deprecated' ? `<button class="ghost" onclick="setStatus('${a.id}','active')">恢复在役</button>` : ''}
+      </div>
+    </div>`).join('') : '<div class="empty">无匹配原子</div>';
+  const drafts = rows.filter(a => a.status === 'draft').length;
+  const b = $('#abadge'); b.textContent = drafts; b.classList.toggle('hidden', !drafts);
+  updatePickInfo();
+  // 草稿卡自动载入相似原子，审阅时无需手点
+  rows.filter(a => a.status === 'draft').forEach(a => findSim(a.id));
+}
+
+function atomDetail(id) {
+  const el = document.getElementById('ad-' + id);
+  el.classList.toggle('hidden');
+  if (!el.classList.contains('hidden')) {
+    api('/api/atom?id=' + id).then(d => {
+      document.getElementById('ab-' + id).textContent = d.body;
+    });
+  }
+}
+
+// ---------- 同族多场景高发区 ----------
+function toggleClusters() {
+  const a = $('#clusterArea');
+  a.classList.toggle('hidden');
+  if (!a.classList.contains('hidden') && !a.dataset.loaded) loadClusters();
+}
+
+async function loadClusters() {
+  const rows = await api('/api/atom_clusters');
+  $('#clusterArea').dataset.loaded = '1';
+  $('#clusterArea').innerHTML = rows.length ? rows.map(c => `
+    <div class="card">
+      <div class="row">
+        <span class="t" style="cursor:default">🧬 ${esc(c.theme)}（${c.n} 个场景）</span>
+        <span class="meta">${c.promoted
+          ? '<span class="tag">📌 已升级全局防范规则</span>'
+          : `<button class="ok" style="padding:3px 10px;font-size:12px" onclick="promoteCluster('${esc(c.theme)}')">⬆ 一键升级全局防范规则</button>`}</span>
+      </div>
+      ${c.members.map(m => `
+        <div class="desc" style="margin-top:6px">[${m.id}]（${m.status}）${esc(m.title)} ｜ ${esc(m.project || '-')}<br>　${esc(m.one_liner)}<br>　<span class="meta">边界：${esc(m.boundary)}</span></div>`).join('')}
+    </div>`).join('') : '<div class="empty">暂未发现同族多场景问题（≥2 个原子同族或共有标签才会聚成一组）</div>';
+}
+
+let cmTheme = '';
+
+async function promoteCluster(theme) {
+  const cd = await api('/api/cluster_condense?theme=' + encodeURIComponent(theme));
+  if (cd.error) { alert(cd.error); return; }
+  cmTheme = theme;
+  $('#cmIds').textContent = cd.ids.join(', ');
+  const ta = $('#cmText');
+  ta.value = cd.draft;
+  updateCmCount();
+  $('#clusterModal').classList.remove('hidden');
+}
+
+function updateCmCount() {
+  const n = $('#cmText').value.length;
+  const el = $('#cmCount');
+  el.textContent = n + ' 字符' + (n > 700 ? ' ｜ ⚠️ 超 700，请再压缩' : '');
+  el.style.color = n > 700 ? '#e5484d' : '';
+}
+
+async function confirmCluster() {
+  const draft = $('#cmText').value.trim();
+  if (!draft) { alert('凝练稿为空'); return; }
+  if (draft.length > 700) { alert('凝练稿 ' + draft.length + ' 字符偏长，请再压缩后再升级'); return; }
+  const r = await api('/api/cluster_rule', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({theme: cmTheme, condensed: draft})});
+  closeClusterModal();
+  alert(r.ok ? r.result : '失败：' + r.result);
+  loadClusters();
+}
+
+function closeClusterModal() { $('#clusterModal').classList.add('hidden'); }
+
+$('#clusterModal').addEventListener('click', e => { if (e.target === $('#clusterModal')) closeClusterModal(); });
+
+function pickAll(on) {
+  document.querySelectorAll('.pick').forEach(c => c.checked = on);
+  updatePickInfo();
+}
+function updatePickInfo() {
+  const n = document.querySelectorAll('.pick:checked').length;
+  $('#pickinfo').textContent = n ? `已勾选 ${n} 条` : '勾选草稿后可批量操作';
+}
+
+async function findSim(id) {
+  const pre = document.getElementById('sim-' + id);
+  pre.classList.remove('hidden');
+  pre.textContent = '计算相似度（词面+语义向量）…';
+  const rows = await api('/api/atom_similar?id=' + id);
+  if (!rows.length) { pre.textContent = '未发现相似原子'; return; }
+  // 并入原则：后来者并入先来者；≥70% 才显示并入按钮；支持勾选批量
+  const laterOf = (a, b) => (parseInt(a.slice(2)) > parseInt(b.slice(2)) ? a : b);
+  const earlierOf = (a, b) => (parseInt(a.slice(2)) > parseInt(b.slice(2)) ? b : a);
+  pre.innerHTML = '<div>相似原子（≥82% 强相似宜合并；60~70% 仅参考；复合原子先在会话里说「拆分 A-xxx」）</div>' +
+    '<div style="margin:6px 0;display:flex;gap:8px;align-items:center">' +
+    '<button class="ghost" style="padding:2px 8px;font-size:12px" onclick="batchLink(\'' + id + '\')">🔗 批量标注同族（勾选项）</button>' +
+    '<button class="ghost" style="padding:2px 8px;font-size:12px" onclick="batchMerge(\'' + id + '\')">⧉ 批量并入（勾选项，方向自动）</button></div>' +
+    rows.map(r => {
+      const later = laterOf(id, r.id), earlier = earlierOf(id, r.id);
+      const mergeBtn = r.score >= 0.7
+        ? `<button class="ghost" style="padding:2px 8px;font-size:12px" onclick="mergeInto('${r.id}','${id}')">⧉ 把 ${later} 并入 ${earlier}</button>`
+        : '';
+      return `<div style="margin-top:6px;display:flex;gap:8px;align-items:flex-start">
+        <input type="checkbox" class="simpick" data-sid="${id}" value="${r.id}" data-score="${r.score}">
+        <div><div>${(r.score * 100).toFixed(0)}% [${r.channel === 'sem' ? '语' : '词'}] [${r.status}] ${r.id} ${esc(r.title)}</div>
+        <div style="margin:3px 0 0 0;display:flex;gap:8px">
+          <button class="ghost" style="padding:2px 8px;font-size:12px" onclick="linkFamily('${id}','${r.id}')">🔗 标注同族</button>
+          ${mergeBtn}
+        </div></div></div>`;
+    }).join('');
+}
+
+async function batchLink(id) {
+  const others = [...document.querySelectorAll(`.simpick[data-sid="${id}"]:checked`)].map(c => c.value);
+  if (!others.length) { alert('先勾选相似原子'); return; }
+  const note = prompt('同族场景说明（本批共用，可空）：', '同族但不同场景');
+  if (note === null) return;
+  const r = await api('/api/atom_link_batch', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({id, others, note})});
+  alert('已批量标注 ' + others.length + ' 对同族');
+  loadAtoms();
+}
+
+async function batchMerge(id) {
+  const picks = [...document.querySelectorAll(`.simpick[data-sid="${id}"]:checked`)]
+    .map(c => ({id: c.value, score: parseFloat(c.dataset.score)}));
+  if (!picks.length) { alert('先勾选相似原子'); return; }
+  // 方向分组：id 比对方早 → 对方并入 id；id 比对方晚 → id 并入对方（多个去向取最高分的一个，其余仅跳过）
+  const num = x => parseInt(x.slice(2));
+  const intoId = picks.filter(p => num(p.id) > num(id)).map(p => p.id);       // 这些并入 id
+  const earlier = picks.filter(p => num(p.id) < num(id));                     // id 可并入的先来者
+  earlier.sort((a, b) => b.score - a.score);
+  const ops = [];
+  if (intoId.length) ops.push({primary: id, absorbed: intoId});
+  if (earlier.length) ops.push({primary: earlier[0].id, absorbed: [id]});
+  const skipped = earlier.slice(1).map(p => p.id);
+  const plan = ops.map(o => `${(o.absorbed||[]).join(',')} → 并入 → ${o.primary}`).join('；')
+    + (skipped.length ? `（其余 ${skipped.join(',')} 仅参考未并入）` : '');
+  if (!plan || !ops.length) { alert('勾选项无满足方向的并入对'); return; }
+  if (!confirm('并入计划：\n' + plan + '\n\n执行？')) return;
+  const r = await api('/api/atom_merge_batch', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ops})});
+  const bad = (r.result || []).filter(x => !x.ok);
+  alert(bad.length ? '部分失败：' + JSON.stringify(bad) : '已按计划合并');
+  loadAtoms();
+}
+
+async function linkFamily(a, b) {
+  const note = prompt('同族场景说明（写清两者边界差异，可空）：', '同族但不同场景');
+  if (note === null) return;
+  const r = await api('/api/atom_link', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({id: a, other: b, note})});
+  alert(r.ok ? '已双向标注同族：' + r.result : '失败：' + r.result);
+  loadAtoms();
+}
+
+async function mergeInto(primary, absorbed) {
+  if (!confirm(`把 ${absorbed} 并入 ${primary}？\n只并入相似度高的共享句（记入主条合并记录）；被并条若有独有内容将保留在役并标注，无独有内容才整条废弃。`)) return;
+  const r = await api('/api/atom_merge', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({primary, absorbed: [absorbed]})});
+  alert(r.ok ? '已合并到 ' + r.result : '失败：' + r.result);
+  loadAtoms();
+}
+
+async function setStatus(id, status) {
+  if (status === 'deprecated' && !confirm('确定废弃该原子？')) return;
+  await api('/api/atom_status', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({id, status})});
+  loadAtoms();
+}
+
+async function deleteOne(id) {
+  if (!confirm('彻底删除 ' + id + '？文件将被移除，不可恢复（废弃状态仅是标记）。')) return;
+  const r = await api('/api/atoms_batch', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ids:[id], op:'delete'})});
+  alert(r.ok ? '已删除' : '失败：' + JSON.stringify(r.result));
+  loadAtoms();
+}
+
+async function batchStatus(status, isRestore) {
+  const ids = [...document.querySelectorAll('.pick:checked')].map(c => c.value);
+  if (!ids.length) { alert('先勾选原子'); return; }
+  if (status === 'deprecated' && !isRestore && !confirm('确定批量废弃 ' + ids.length + ' 条？')) return;
+  await api('/api/atoms_batch', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ids, op: status})});
+  loadAtoms();
+}
+
+async function batchDelete() {
+  const ids = [...document.querySelectorAll('.pick:checked')].map(c => c.value);
+  if (!ids.length) { alert('先勾选原子（仅已废弃的可删除）'); return; }
+  if (!confirm('彻底删除所选 ' + ids.length + ' 条？仅废弃状态的会删除，其余跳过。文件移除不可恢复。')) return;
+  const r = await api('/api/atoms_batch', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ids, op:'delete'})});
+  const d = r.result || {};
+  alert('已删除 ' + ((d.deleted || []).length) + ' 条' + ((d.errors || []).length ? '；跳过: ' + d.errors.join('; ') : ''));
+  loadAtoms();
+}
+
+async function promoteRule(id, promote) {
+  if (!promote && !confirm('从全局 AGENTS.md 撤下这条规则？')) return;
+  if (promote) {
+    await api('/api/atom_status', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({id, status: 'active'})});
+  }
+  const r = await api('/api/atom_rule', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({id, promote})});
+  alert(r.ok ? '已完成：' + r.result : '失败：' + r.result);
+  loadAtoms();
+}
+
+// ---------- candidates ----------
+async function loadCands() {
+  const sort = $('#csort').value;
+  const rows = await api('/api/candidates?sort=' + sort + '&limit=99');
+  const pain = sort === 'pain';
+  $('#clist').innerHTML = rows.length ? rows.map((c, i) => `
+    <div class="card">
+      <div class="row">
+        <span style="display:flex;gap:8px;align-items:center">
+          <input type="checkbox" class="cpick" value="${c.session_id}">
+          <span class="t" onclick="toggleDetail('cd-${c.session_id.slice(-8)}')">
+            ${pain ? `<span class="tag">${c.score >= 200 ? '🔥' : c.score >= 100 ? '🟠' : '⚪'} ${c.score}</span> ` : ''}${i + 1}. ${esc(c.title)}
+          </span>
+        </span>
+        <span class="meta">${pain
+          ? `返工${c.rework}次 · ${c.n_messages}消息 · ${c.n_file_ops}文件操作 · ±${c.delta}行 · ${c.hours}h`
+          : fmtT(c.t_updated) + ' ｜ ' + esc(c.project_key)}</span>
+      </div>
+      <div class="desc">🎯 ${esc(c.reason || '大规模生产会话')} ｜ 项目: ${esc(c.project_key)}</div>
+      ${c.summary ? `<div class="desc">📝 ${esc(c.summary)}</div>` : ''}
+      ${c.top_files && c.top_files.length ? `<div class="desc">📁 痛点文件：${c.top_files.map(f => `<span class="tag">${esc(f[0])} ×${f[1]}</span>`).join(' ')}</div>` : ''}
+      <div class="desc hidden" id="cd-${c.session_id.slice(-8)}">
+        <button onclick="extractPrompt('${c.session_id}')">复制提炼提示词</button>
+        <button class="ghost" onclick="painView('${c.session_id}')">🔍 痛点透视</button>
+        <button class="ghost" onclick="doneCand('${c.session_id}')">已处理（不再提醒）</button>
+        <pre class="hidden" id="cp-${c.session_id.slice(-8)}"></pre>
+      </div>
+    </div>`).join('') : '<div class="empty">候选队列为空——干完活系统会自动把值得沉淀的会话排进来</div>';
+  const b = $('#cbadge'); b.textContent = rows.length; b.classList.toggle('hidden', !rows.length);
+}
+
+async function painView(sid) {
+  const pre = document.getElementById('cp-' + sid.slice(-8));
+  pre.classList.remove('hidden');
+  pre.textContent = '扫描会话原文中的报错行…';
+  try {
+    const d = await api('/api/candidate_pain?session_id=' + sid);
+    let out = '';
+    if (d.top_files.length) {
+      out += '📁 反复改动的文件：\n' + d.top_files.map(f => `  ${f[0]}  ×${f[1]}`).join('\n') + '\n\n';
+    }
+    out += d.error_lines.length
+      ? '⚠️ 原文中的报错/异常行（前 ' + d.error_lines.length + ' 条）：\n' + d.error_lines.map(l => '  ' + l).join('\n')
+      : '⚠️ 未扫到明显报错行（可能是设计讨论类会话）';
+    pre.textContent = out;
+  } catch (e) {
+    pre.textContent = '透视失败: ' + e;
+  }
+}
+
+async function doneCand(sid) {
+  await api('/api/candidate_done', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({session_id: sid})});
+  loadCands();
+}
+
+function pickAllCands(on) {
+  document.querySelectorAll('.cpick').forEach(c => c.checked = on);
+}
+
+async function batchDoneCands() {
+  const ids = [...document.querySelectorAll('.cpick:checked')].map(c => c.value);
+  if (!ids.length) { alert('先勾选候选会话'); return; }
+  if (!confirm('把 ' + ids.length + ' 条候选标记为已处理（不再提醒）？')) return;
+  for (const sid of ids) {
+    await api('/api/candidate_done', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({session_id: sid})});
+  }
+  loadCands();
+}
+
+// ---------- init ----------
+$('#sq').addEventListener('keydown', e => { if (e.key === 'Enter') loadSessions(); });
+$('#aq').addEventListener('keydown', e => { if (e.key === 'Enter') loadAtoms(); });
+loadStats();
+loadSessions();
+setInterval(loadStats, 60000);
+</script>
+</body>
+</html>

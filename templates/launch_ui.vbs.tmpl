@@ -1,0 +1,47 @@
+' PAIOS memory-base UI launcher (from paios-kit)
+' Double-click: ensure server running (hidden start if not), then open in default browser.
+Option Explicit
+Const BASE_DIR = "{{PAIOS_ROOT}}"
+Const MEM_URL = "http://127.0.0.1:{{UI_PORT}}/"
+Const PYW = "{{PYW}}"
+
+Dim shell
+Set shell = CreateObject("WScript.Shell")
+
+EnsureServer MEM_URL, _
+  """" & PYW & """ -c ""from paios.webserver import serve; serve(open_browser=False)""", _
+  "pythonw -c ""from paios.webserver import serve; serve(open_browser=False)"""
+
+shell.Run MEM_URL, 1, False     ' open memory base in default browser
+
+Sub EnsureServer(url, cmdPinned, cmdFallback)
+  If Up(url) Then Exit Sub
+  Dim i
+  StartHidden cmdPinned
+  For i = 1 To 30              ' wait up to 15s
+    WScript.Sleep 500
+    If Up(url) Then Exit Sub
+  Next
+  StartHidden cmdFallback      ' fallback: pythonw on PATH
+  For i = 1 To 30
+    WScript.Sleep 500
+    If Up(url) Then Exit Sub
+  Next
+End Sub
+
+' cmd = full command line (exe included), joined exactly once.
+' History: passing exe and cmd separately duplicated the exe -> silent fail.
+Sub StartHidden(cmd)
+  shell.CurrentDirectory = BASE_DIR
+  shell.Run cmd, 0, False      ' window style 0 = hidden, no console ever
+End Sub
+
+Function Up(url)
+  Dim http
+  On Error Resume Next
+  Set http = CreateObject("MSXML2.XMLHTTP")
+  http.open "GET", url, False
+  http.send
+  Up = (Err.Number = 0 And http.Status = 200)
+  On Error Goto 0
+End Function

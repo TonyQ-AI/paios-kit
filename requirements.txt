@@ -1,0 +1,3 @@
+# PAIOS 知识层语义查重（bge-small-zh-v1.5，ONNX CPU 推理）
+# Web 层与索引层全部为 Python 标准库，无其他第三方依赖。
+fastembed>=0.3

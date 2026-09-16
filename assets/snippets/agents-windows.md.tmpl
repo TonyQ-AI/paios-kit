@@ -1,0 +1,41 @@
+# Windows shell 避坑手册（强制，执行前对照，禁止踩了再修）
+本规则面向中文 Windows（GBK 控制台）+ Git Bash（MSYS 会改写命令参数）。**凡是内容或路径含中文/空格/特殊字符的操作，默认直接走 python，shell 内联只允许纯 ASCII。**
+
+| 场景 | 禁止 | 必须用 |
+|---|---|---|
+| 写/追加含中文的文件 | bash 的 echo / printf / heredoc / cat<<EOF（按 GBK 落盘=乱码） | Write/Edit 工具，或 `python` open(..., encoding="utf-8") |
+| **弹控制台窗口的命令** | 裸跑 cmd / npx / ffmpeg 等控制台程序 | 一律 `python {{ZCODE_DIR}}\scripts\silent.py cmd /c <cmd> [args]` + Bash 工具 run_in_background（CREATE_NO_WINDOW+自建管道捕获+GBK 解码；npx 是 cmd 垫片必须经 cmd /c；继承 MSYS stdio 会卡死） |
+| 创建目录联接 | bash 内联 `cmd //c mklink`（MSYS 改写目标路径） | python `_winapi.CreateJunction(target, link)`（零控制台进程）；或 silent.py |
+| 路径含中文/空格的任何命令 | bash 字符串内联拼接转义 | python `subprocess.run(list参数)`，不做字符串拼接 |
+| 读取 cmd/pip 等子进程输出 | `capture_output=True, text=True`（GBK 输出把 UTF-8 解码线程打崩） | 传 `encoding="gbk", errors="replace"`；或不捕获直接看控制台 |
+| 列目录/找中文文件名 | `ls` + `grep` 看输出（显示层必乱码，还会误导判断） | python `os.listdir` + `json.dumps(..., ensure_ascii=True)`，或按已知路径直接操作不打印 |
+| 批量修改含中文的文件 | sed / awk 管道 | python 读入→处理→显式 UTF-8 写回 |
+| git 显示中文文件名 | 默认 quotepath（`\xxx` 转义不可读） | 每仓库 `git config core.quotepath false` |
+| 换行符敏感的文件操作 | bash 工具链写入（带 CRLF/BOM 风险） | python 显式 `newline="\n"` |
+| **文件/文件夹名来自数据字段** | 只净化文件夹名、漏了文件名或 zip 内部条目名（`/ \ :` 都是路径字符） | 所有派生名统一过同一个 sanitize 函数；内容标题保留原始名 |
+| **生成/改写代码·脚本文件** | `python - <<'EOF'` 动态拼代码文本、heredoc 嵌代码（多层转义必翻车） | **Write 工具直接写目标文件**（被 modified-since-read 挡住就先 Read 再 Write）；python 只做数据处理，不生成代码文本。**对 `.ps1` 例外**：Write 写的是无 BOM UTF-8，PS 5.1 按 GBK 读必乱码，见下行 |
+| **bash 内联含转义序列的命令**（`\t` `\u` `\\`） | `python -c "..."` 双引号内联（bash 先吃一层转义：`\t` 变真制表符、`\u` 截断报语法错、尾部 `\` 直接语法错误） | **Write 写成 .py 文件再 python 执行**；确需内联时用单引号包裹且内容禁含任何转义序列 |
+| **内联调用 PowerShell** | bash 里内联 `powershell -Command "..."`（`$` 被 bash/MSYS 先吃、引号嵌套必错） | 逻辑写成 `.ps1`，经 Bash 工具 `powershell -NoProfile -ExecutionPolicy Bypass -File <path>` 执行；复杂逻辑绝不内联 |
+| **写 `.ps1` / `.bat` / `.cmd` / `.vbs` 含中文** | Write/echo 写无 BOM UTF-8 的 `.ps1`（PS 5.1 按 GBK 读=乱码，报 `TerminatorExpectedAtEndOfString`）；`.bat`/`.cmd` 里放中文（cmd 下乱码）；`.vbs` 中文注释按 ANSI/GBK 误读吞换行（编译错「缺少语句」） | `.ps1` 用纯 ASCII 或带 BOM；`.bat`/`.cmd`/`.vbs` 保持纯 ASCII（复杂逻辑放 `.ps1`，`.bat` 只作一行启动器）；需中文显示先设输出编码 |
+| CLI 工具间复用逻辑 | 跨文件 import 另一脚本（执行上下文脆弱） | 工具自包含；确需共享抽成独立模块放稳定路径 |
+| 长任务（渲染/转写/批量生成） | 前台干等 | Bash 工具 run_in_background: true + TaskOutput 轮询 |
+
+## 网络代理
+- 访问 GitHub（git clone / fetch / push）直连不通时，必须走本机代理（端口按你的实际代理软件填写，下例以 `7890` 为例）：
+  - git：`git -c http.proxy=http://127.0.0.1:7890 -c https.proxy=http://127.0.0.1:7890 fetch origin`
+  - 或对仓库配置后长期生效：`git config http.proxy http://127.0.0.1:7890 && git config https.proxy http://127.0.0.1:7890`
+  - curl：`curl -x http://127.0.0.1:7890 <url>`
+
+## 产出物汇报规则（强制）
+阶段性汇报「产出了什么、在哪里」时，**目录必须给完整绝对路径**（用户点一下就能在资源管理器打开定位），禁止只给相对目录简称。多个产出物分属不同目录时，每个目录都写全路径。
+
+## 清理/移动纪律（强制）
+清理或移动文件前，先做**风险项排查**，命中任一条就改时机或改范围：
+1. **生成任务在飞**：后台任务正在产出文件的目录，等任务跑完再清理；不确定先查进程和文件 mtime。
+2. **任务的工作中间件**：分段 wav、临时 json、`_*` 前缀文件等是流水线的组装原料——只清「终产物被新版本取代」的文件，中间件留给工具自己覆盖。
+3. **引用完整性**：删除/移动前确认没有活动进程、配置、索引还引用该路径。
+4. **宁可漏删不可误删**：拿不准的项移进「待定区」观察，而不是直接删除。
+5. 清理完成后**复验在役文件仍在**，并跑一次受影响链路的最小验证。
+
+## 执行前自查口令
+**有中文吗？路径有中文或空格吗？会弹窗口吗？要读子进程输出吗？在生成代码文件吗？——命中任意一条：中文/路径→python；生成代码→Write 工具；弹窗/子进程→silent.py。**
