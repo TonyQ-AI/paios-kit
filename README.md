@@ -20,6 +20,13 @@
 ## 安装（三步）
 
 > **没有技术背景？** 直接看 [TROUBLESHOOTING.md](TROUBLESHOOTING.md)——中文图文手册，含每一步怎么点、常见报错对照表。
+>
+> **更省事的方式**：把下面的这段话原样发给你的 ZCode，让它自动装（装完它会让你重启 ZCode）：
+>
+> ```
+> 请帮我在本机安装 paios-kit：克隆 https://github.com/TonyQ-AI/paios-kit 后，
+> 严格按它 README 的「AI 安装指令」一节执行安装，完成后告诉我如何验证。
+> ```
 
 ```bash
 # 1. 获取本仓库（二选一）
@@ -34,6 +41,20 @@ python install.py
 ```
 
 需要先装 Python 3.10+（安装时**务必勾选 Add Python to PATH**），细节见手册第 1 节。
+
+## AI 安装指令（给执行安装的 ZCode 看）
+
+你是负责在本机安装 paios-kit 的 AI。按顺序执行，每步失败就按括号里的方案处理：
+
+1. 克隆仓库到 `D:\tools\paios-kit`（目录被占用就换 `D:\paios-kit`）；
+2. 检查 `python --version` 是否在 3.10–3.13 之间；没有或版本过低 → 用 `winget install -e --id Python.Python.3.12` 安装（winget 不可用则引导用户到 python.org 手动装并勾选 Add to PATH），**装完必须新开终端再继续**（PATH 才生效）；
+3. 在仓库目录执行 `python install.py`（默认安装根 `%USERPROFILE%\paios`，端口 8643 被占会自动顺延）。pip 失败安装器会自动切清华镜像重试；模型预热失败不阻塞，可忽略；
+4. 执行中用户的杀毒软件/SmartScreen 弹窗属误报（本地脚本，仅下载模型时联网），提醒用户点「允许」；
+5. 安装完成后验证：`python -c "import sys; sys.path.insert(0, r'<安装根>'); import paios; print('ok')"` 输出 ok；
+6. 可选配置：询问用户项目通常放在哪个目录，有则补跑 `python install.py --workspace-roots "<该目录>"`（多个用逗号分隔）；
+7. 最后**必须提醒用户**：完全退出 ZCode（含托盘）并重新打开，paios_* 工具和 $new-project 等技能才会生效；验证方式是在新会话里说「搜一下我的历史会话」。
+
+不要手动编辑 `~/.zcode/cli/config.json` 或 `~/.zcode/AGENTS.md`——`install.py` 会以合并方式写入，重复执行是安全的（幂等升级）。用户的会话数据与经验原子全部存放在安装根目录，卸载用仓库里的 `uninstall.bat`。
 
 安装器做了什么（全部幂等，重跑即升级）：
 
