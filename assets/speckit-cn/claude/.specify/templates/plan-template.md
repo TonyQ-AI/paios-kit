@@ -1,6 +1,6 @@
 # 实现计划：[功能]
 
-**分支**: `[###-feature-name]` | **日期**: [日期] | **规格**: [链接]
+**切片目录**: `specs/[###-feature-name]/` | **日期**: [日期] | **规格**: [链接]
 **输入**: 来自 `/specs/[###-feature-name]/spec.md` 的功能规格
 
 **注意**: 此模板由 `/定计划` 命令填充。有关执行工作流程，请参阅 `.specify/templates/commands/plan.md`。

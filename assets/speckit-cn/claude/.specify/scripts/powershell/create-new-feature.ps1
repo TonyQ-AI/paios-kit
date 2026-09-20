@@ -8,6 +8,9 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 
+# Shared helpers: Save-FeatureJson persists .specify/feature.json
+. "$PSScriptRoot/common.ps1"
+
 if (-not $FeatureDescription -or $FeatureDescription.Count -eq 0) {
     Write-Error "Usage: ./create-new-feature.ps1 [-Json] <feature description>"
     exit 1
@@ -72,22 +75,25 @@ if (Test-Path $specsDir) {
 $next = $highest + 1
 $featureNum = ('{0:000}' -f $next)
 
+# $branchName is the slice identity (specs directory name), not a git branch.
 $branchName = $featureDesc.ToLower() -replace '[^a-z0-9]', '-' -replace '-{2,}', '-' -replace '^-', '' -replace '-$', ''
 $words = ($branchName -split '-') | Where-Object { $_ } | Select-Object -First 3
 $branchName = "$featureNum-$([string]::Join('-', $words))"
 
-if ($hasGit) {
-    try {
-        git checkout -b $branchName | Out-Null
-    } catch {
-        Write-Warning "Failed to create git branch: $branchName"
-    }
-} else {
-    Write-Warning "[specify] Warning: Git repository not detected; skipped branch creation for $branchName"
+# No git branch is created. Projects using this toolchain work directly on the
+# default branch, so the current slice is identified by .specify/feature.json
+# (written below) instead of by a numbered branch name.
+if (-not $hasGit) {
+    Write-Warning "[specify] Warning: Git repository not detected; .specify/feature.json is still written, but $branchName is not versioned"
 }
 
 $featureDir = Join-Path $specsDir $branchName
 New-Item -ItemType Directory -Path $featureDir -Force | Out-Null
+
+# Persist the current slice so downstream commands (plan / tasks / analyze /
+# implement) resolve it without relying on a git branch name.
+Save-FeatureJson -RepoRoot $repoRoot -FeatureDirectory "specs/$branchName"
+$env:SPECIFY_FEATURE_DIRECTORY = $featureDir
 
 $template = Join-Path $repoRoot '.specify/templates/spec-template.md'
 $specFile = Join-Path $featureDir 'spec.md'
