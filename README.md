@@ -95,7 +95,7 @@ python uninstall.py               # 摘除：MCP/hook/技能/AGENTS.md 段全部
 ## 数据与隐私
 
 - 你的会话索引、经验原子全部存放在安装根的 `data/` 与 `knowledge/` 下，**不出本机**；
-- 想云备份经验原子：把安装根 `git init` 并配好远程即可，Stop hook 会自动 commit + push（代理环境设 `PAIOS_GIT_PROXY` 环境变量指向你的代理，如 `http://127.0.0.1:7890`；未设则直连）；
+- 想云备份经验原子（可选）：把安装根做成 git 仓库并配好私有远程，Stop hook 会在每次会话结束时自动 commit + push。完整步骤（含代理配置与常见问题）见 [TROUBLESHOOTING.md](TROUBLESHOOTING.md) 第 5 节配置 ② 与第 6 节「⚠ 推送失败」条目；
 - 本仓库不含作者的任何个人数据（会话、原子、密钥），安装脚本也不会读取你 config.json 里的密钥，只做合并写入。
 
 ## 常见问题

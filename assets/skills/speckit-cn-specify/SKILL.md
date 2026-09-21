@@ -14,13 +14,13 @@ description: "提需求：从自然语言功能描述创建结构化中文需求
 ## 本机执行约定
 
 - 运行 `.ps1` 一律套静默包装：`python {{ZCODE_DIR}}/scripts/silent.py powershell -NoProfile -ExecutionPolicy Bypass -File <脚本> [参数...]`
-- **分支短名只用 ASCII**（见步骤 1）——脚本会把非 ASCII 全部替换成 `-`，中文参数会生成残缺分支名。
+- **切片短名只用 ASCII**（见步骤 1）——脚本会把非 ASCII 全部替换成 `-`，中文参数会生成残缺目录名（如 `001-`）。
 - 项目根缺 `.specify/` → 先执行 `$speckit-cn-init` 流程再继续。
 - 产物用 Write/Edit 工具写入，UTF-8，正文中文。
 
 ## Outline
 
-1. **生成 ASCII 短名**（2-4 个词）：从功能描述提取最有概括力的关键词，动宾式优先（如 `user-auth`、`fix-payment-timeout`；中文描述取英文/拼音译名）。保留专有技术名词（OAuth2、API、JWT）。此短名将决定分支名与 specs 目录名。
+1. **生成 ASCII 短名**（2-4 个词）：从功能描述提取最有概括力的关键词，动宾式优先（如 `user-auth`、`fix-payment-timeout`；中文描述取英文/拼音译名）。保留专有技术名词（OAuth2、API、JWT）。此短名决定 specs 切片目录名（如 `001-user-auth`）。
 
 2. 运行脚本（**只运行一次**），从 JSON 输出解析 `BRANCH_NAME` 和 `SPEC_FILE`（绝对路径）：
 
@@ -28,7 +28,7 @@ description: "提需求：从自然语言功能描述创建结构化中文需求
    python {{ZCODE_DIR}}/scripts/silent.py powershell -NoProfile -ExecutionPolicy Bypass -File .specify/scripts/powershell/create-new-feature.ps1 -Json "<ASCII短名>"
    ```
 
-   经 silent.py 以参数列表传参，无需 shell 引号转义。脚本会创建并切换分支、初始化 spec 文件。
+   经 silent.py 以参数列表传参，无需 shell 引号转义。脚本只创建 `specs/<NNN-短名>/` 目录与 spec.md，并把当前切片写入 `.specify/feature.json`；**不建 git 分支**（全局约定 master 直做，脚本已按此改造）。
 
 3. 读取 `.specify/templates/spec-template.md` 了解必需章节。
 
@@ -82,7 +82,7 @@ description: "提需求：从自然语言功能描述创建结构化中文需求
 
    d. **更新清单**：每轮校验后把最新通过/不通过状态写回清单文件。
 
-7. 报告完成：分支名、spec 文件路径、清单校验结果、下一阶段建议（`$speckit-cn-clarify` 或 `$speckit-cn-plan`）。
+7. 报告完成：切片目录名（如 `001-user-auth`）、spec 文件路径、清单校验结果、下一阶段建议（`$speckit-cn-clarify` 或 `$speckit-cn-plan`）。
 
 ## 编写守则
 

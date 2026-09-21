@@ -16,7 +16,7 @@ description: "为当前项目初始化 SpecKit-CN（GitHub Spec-Kit 中文版，
 
 ### 2. 确保 git 仓库
 
-- 不是 git 仓库 → `git init -q`（spec-kit 流程按功能分支工作）。
+- 不是 git 仓库 → `git init -q`（规格产物需要版本化与可回溯的提交历史）。
 
 ### 3. 复制 .specify/
 
@@ -27,6 +27,7 @@ python -c "import shutil, os; shutil.copytree('{{ZCODE_DIR}}/speckit-cn/claude/.
 ```
 
 - 若复制前项目已有 `.specify/memory/constitution.md`：先复制一份备份（如 `constitution.md.bak-20260903`），copytree 覆盖后再恢复——用户宪章不被模板覆盖。
+- 复制后把 `.specify/feature.json` 写进项目 `.gitignore`（文件不存在则创建；已有该行则跳过）：它记录「当前切片」，每次提需求都会被覆盖，属本地状态，不该进版本库。
 
 ### 4. 写入 AGENTS.md 流程约定
 
@@ -59,4 +60,4 @@ python -c "import shutil, os; shutil.copytree('{{ZCODE_DIR}}/speckit-cn/claude/.
 
 1. 运行 `.specify/scripts/powershell/` 下任何 `.ps1` 一律套静默包装防控制台弹窗：`python {{ZCODE_DIR}}/scripts/silent.py powershell -NoProfile -ExecutionPolicy Bypass -File <脚本相对路径> [参数...]`
 2. 产物文件（spec/plan/tasks/checklist）一律用 Write/Edit 工具写入，UTF-8 编码，正文中文。
-3. 传给脚本的分支短名只用 ASCII（英文/拼音）——`create-new-feature.ps1` 会把非 ASCII 字符全部替换成 `-`，中文参数会生成残缺分支名。
+3. 传给脚本的切片短名只用 ASCII（英文/拼音）——`create-new-feature.ps1` 会把非 ASCII 字符全部替换成 `-`，中文参数会生成残缺目录名。脚本**不建 git 分支**（全局约定 master 直做）：只创建 `specs/<NNN-短名>/` 与 spec.md，并把当前切片写入 `.specify/feature.json`（该文件是本地状态，建议加入项目 `.gitignore`）。

@@ -354,20 +354,15 @@ def _open_in_explorer(path):
     return False
 
 
-def _warm_vectors():
-    """后台预热语义向量模型，避免首个「找相似」请求冷启动。"""
-    try:
-        from . import vectors
-        vectors._get_model()
-    except Exception as e:
-        import sys
-        print("vector warmup failed: %s" % e, file=sys.stderr)
-
-
 def serve(port=DEFAULT_PORT, open_browser=True):
+    """启动 UI 服务。
+
+    向量模型**不预热**（2026-09-22 起）：按需在首次「找相似」时加载。
+    冷启动实测 ~0.1s（OpenBLAS 单线程化后常驻 ~163MB），而预热会让
+    「开着不用」也长期付这份内存（实测 632MB 私有提交的主因，见交接 #33）。
+    """
     ensure_data_dir()
     srv = ThreadingHTTPServer(("127.0.0.1", port), Handler)
-    threading.Thread(target=_warm_vectors, daemon=True).start()
     url = f"http://127.0.0.1:{port}/"
     print(f"PAIOS UI: {url}  (Ctrl+C 退出)")
     if open_browser:

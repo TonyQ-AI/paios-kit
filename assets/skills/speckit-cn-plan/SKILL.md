@@ -36,7 +36,7 @@ description: "定计划：AI 架构师生成中文技术实现计划与设计文
    - Phase 1：运行 agent 上下文更新脚本
    - 设计完成后复评 Constitution Check
 
-5. **停止并报告**：本技能在 Phase 2 规划完成后结束。报告分支、IMPL_PLAN 路径与生成的产物。
+5. **停止并报告**：本技能在 Phase 2 规划完成后结束。报告切片目录、IMPL_PLAN 路径与生成的产物。
 
 ## Phases
 

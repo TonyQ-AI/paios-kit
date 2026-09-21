@@ -1,6 +1,6 @@
 ---
 name: speckit-cn-checklist
-description: "测试清单：生成'需求的单元测试'——验证需求本身的质量（完整性/清晰度/一致性/可度量性/覆盖面），不是测试实现。对应 SpecKit-CN 命令 /测试清单。触发词：测试清单、质量检查清单、需求检查。需项目已有功能分支与规格产物（缺则先跑 $speckit-cn-specify）。"
+description: "测试清单：生成'需求的单元测试'——验证需求本身的质量（完整性/清晰度/一致性/可度量性/覆盖面），不是测试实现。对应 SpecKit-CN 命令 /测试清单。触发词：测试清单、质量检查清单、需求检查。需项目已有规格产物（缺则先跑 $speckit-cn-specify）。"
 ---
 
 > 适配自 [SpecKit-CN](https://github.com/chameleon-nexus/speckit-cn)（commit 0db9fa5）的 `claude/.claude/commands/测试清单.md`；主副本在 `{{ZCODE_DIR}}/speckit-cn`。

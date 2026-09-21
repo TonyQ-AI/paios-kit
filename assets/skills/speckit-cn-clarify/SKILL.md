@@ -1,6 +1,6 @@
 ---
 name: speckit-cn-clarify
-description: "需求变更：识别并澄清需求规格中的模糊之处，把澄清结论增量写回 spec.md（最多 5 问，逐题问答）。对应 SpecKit-CN 命令 /需求变更。触发词：需求变更、澄清需求、需求模糊点。需项目已有功能分支与 spec.md（缺则先跑 $speckit-cn-specify）。"
+description: "需求变更：识别并澄清需求规格中的模糊之处，把澄清结论增量写回 spec.md（最多 5 问，逐题问答）。对应 SpecKit-CN 命令 /需求变更。触发词：需求变更、澄清需求、需求模糊点。需项目已有切片目录与 spec.md（缺则先跑 $speckit-cn-specify）。"
 ---
 
 > 适配自 [SpecKit-CN](https://github.com/chameleon-nexus/speckit-cn)（commit 0db9fa5）的 `claude/.claude/commands/需求变更.md`；主副本在 `{{ZCODE_DIR}}/speckit-cn`。
@@ -25,7 +25,7 @@ description: "需求变更：识别并澄清需求规格中的模糊之处，把
 
 1. 在项目根运行（**只运行一次**）`.specify/scripts/powershell/check-prerequisites.ps1 -Json -PathsOnly`，解析最小 JSON 字段：
    - `FEATURE_DIR`、`FEATURE_SPEC`（可选记录 `IMPL_PLAN`、`TASKS` 备用）
-   - JSON 解析失败 → 中止，提示用户先运行 `$speckit-cn-specify` 或检查功能分支环境。
+   - JSON 解析失败 → 中止，提示用户先运行 `$speckit-cn-specify`，或检查 `.specify/feature.json` 是否指向正确的切片目录。
 
 2. 读取当前 spec，按以下分类做结构化歧义与覆盖扫描，每类标注 Clear / Partial / Missing（形成内部覆盖图，除非一个问题都不问，否则不输出原图）：
    - **功能范围与行为**：核心目标与成功标准；明确的范围外声明；用户角色区分

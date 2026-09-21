@@ -1,7 +1,14 @@
 # -*- coding: utf-8 -*-
 """PAIOS 公共路径与配置（个人 AI 作业系统，BLUEPRINT v1.1）。"""
 import json
+import os
 from pathlib import Path
+
+# numpy 捆绑的 OpenBLAS 在 import 时按 CPU 核数预分配线程缓冲（本机 16 核实测 491MB）。
+# 本项目只用小矩阵余弦相似度，不走多线程 BLAS——限 1 线程可省 ~482MB，
+# 实测向量输出逐位相同、推理耗时一致（交接文档 #33）。必须在 numpy 首次 import
+# 前设置，故放在包 __init__（所有入口 paios.webserver/mcp/hook 都先 import 本包）。
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 
 PACKAGE_DIR = Path(__file__).resolve().parent
 BASE_DIR = PACKAGE_DIR.parent                 # 安装根（paios-kit 布局）
