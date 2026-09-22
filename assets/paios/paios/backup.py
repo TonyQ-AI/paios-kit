@@ -181,7 +181,6 @@ def _offsite():
     _cleanup_offsite(offsite)
     print("config-layer sync:", _config_layer_sync())
 
-
 def _config_layer_sync():
     """搭车兜底：把配置层仓库（~/.zcode）的未提交改动提交并推送。
 
@@ -231,14 +230,25 @@ def _config_layer_sync():
 
 
 def _cleanup_offsite(offsite):
+    """异地目录：轮转保留 KEEP_OFFSITE 份，并清掉只属于我们的边车残渣。
+
+    该目录可能与用户其他备份共处，故一律**限定 db-weekly- 前缀**，
+    绝不碰同目录的其他文件。
+    """
     import os
-    files = sorted(f for f in os.listdir(offsite)
-                   if f.startswith("db-weekly-"))
+    names = sorted(os.listdir(offsite))
+    files = [f for f in names if f.startswith("db-weekly-") and f.endswith(".sqlite")]
     for f in files[:-KEEP_OFFSITE]:
         try:
             os.remove(os.path.join(offsite, f))
         except OSError:
             pass
+    for f in names:
+        if f.startswith("db-weekly-") and f.endswith(("-journal", "-wal", "-shm", ".tmp")):
+            try:
+                os.remove(os.path.join(offsite, f))
+            except OSError:
+                pass
 
 
 def _cleanup(d, pattern, keep):
