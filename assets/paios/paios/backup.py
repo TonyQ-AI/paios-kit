@@ -10,6 +10,7 @@
   保 3 份——防整盘灾难。**分发包默认没有该配置 → 此功能整体关闭**（不会往
   别人的盘里写）；拷贝的是已通过 backup API 落盘并验证过的快照，不对主库二次加压。
 """
+import os
 import shutil
 import sqlite3
 import time
@@ -33,25 +34,94 @@ def _offsite_dir():
     return local_conf.get("offsite_dir")
 
 
+def _valid_sqlite(path):
+    """O(1) 完整性校验：无热日志 + 页数≥1 且页数×页宽与文件大小自洽 + 可读。
+
+    不扫全库（大库扫不动）。识别两类残废备份：写到一半被中断的截断文件
+    （header 声明的页数 > 实际文件）、带 hot journal 的脏文件。注意必须
+    要求 page_count≥1：空库同样满足 页数×页宽==文件大小（0==0），会被误判有效。
+    """
+    try:
+        if os.path.exists(str(path) + "-journal"):
+            return False
+        if os.path.getsize(path) < 1024:
+            return False
+        con = sqlite3.connect("file:" + str(path).replace("\\", "/") + "?mode=ro", uri=True)
+        try:
+            ps = con.execute("PRAGMA page_size").fetchone()[0]
+            pc = con.execute("PRAGMA page_count").fetchone()[0]
+        finally:
+            con.close()
+        return ps > 0 and pc >= 1 and abs(ps * pc - os.path.getsize(path)) < 4096
+    except Exception:
+        return False
+
+
+def _clean_stale(d):
+    """清掉 .tmp / -journal / -wal / -shm：都不是能独立成立的备份内容。
+
+    （-wal/-shm 是打开备份文件时按源库的 WAL 标记派生出来的边车，
+    备份本体在写入时已转成 DELETE 日志模式，见 _online_backup。）
+    """
+    n = 0
+    for pat in ("*.tmp", "*-journal", "*-wal", "*-shm"):
+        for p in d.glob(pat):
+            try:
+                p.unlink()
+                n += 1
+            except OSError:
+                pass
+    return n
+
+
 def _online_backup(dest):
+    """在线备份，**原子落盘**：先写带 pid 的 .tmp，校验通过再 os.replace。
+
+    中断/并发只会留下 .tmp（下次自动清），永不产生半截 .sqlite 冒充有效备份。
+    写完后把副本转成 DELETE 日志模式（源库是 WAL，备份会继承 WAL 标记，
+    导致每次打开都派生 -wal/-shm 边车文件）。
+    """
     if not SOURCE_DB.exists():
         return "no-source"
+    tmp = dest.with_name(dest.name + ".%d.tmp" % os.getpid())
     src = sqlite3.connect("file:" + str(SOURCE_DB).replace("\\", "/") + "?mode=ro", uri=True)
-    dst = sqlite3.connect(str(dest))
+    dst = sqlite3.connect(str(tmp))
     try:
         src.backup(dst)
+        try:
+            dst.execute("PRAGMA journal_mode=DELETE")   # 副本自包含，无 WAL 边车
+        except sqlite3.Error:
+            pass
     finally:
         dst.close()
         src.close()
+    if not _valid_sqlite(tmp):
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        return "invalid"
+    os.replace(str(tmp), str(dest))
+    return "ok"
 
 
 def run_daily():
-    """每日首次触发：当天全量快照（已存在则跳过）+ 会话级快照 + 异地周备份检查。"""
+    """每日首次触发：当天全量快照 + 会话级快照 + 异地周备份检查。
+
+    僵尸自愈：若当天文件存在但校验不过（截断/带脏日志），删掉重做——
+    否则 `exists` 短路会让那一天的备份永久停在坏文件上。
+    """
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    _clean_stale(BACKUP_DIR)
     dest = BACKUP_DIR / ("db-%s.sqlite" % time.strftime("%Y%m%d"))
-    if dest.exists():
+    if dest.exists() and _valid_sqlite(dest):
         result = "exists"
     else:
+        if dest.exists():
+            try:
+                dest.unlink()
+            except OSError:
+                pass
         result = _online_backup(dest)
         if result == "no-source":
             return result
@@ -62,9 +132,14 @@ def run_daily():
 
 
 def _intraday():
-    """每个会话结束都拍一份当天快照，保最近 KEEP_INTRADAY 份。"""
+    """每个会话结束都拍一份当天快照，保最近 KEEP_INTRADAY 份。
+
+    命名到秒 + 写入带 pid 的 .tmp：同分钟/同秒的并发 hook 不再互相撞车
+    （此前分钟级命名曾在并发时写出截断文件与孤儿 journal）。
+    """
     INTRADAY_DIR.mkdir(parents=True, exist_ok=True)
-    dest = INTRADAY_DIR / ("snap-%s.sqlite" % time.strftime("%Y%m%d-%H%M"))
+    _clean_stale(INTRADAY_DIR)
+    dest = INTRADAY_DIR / ("snap-%s.sqlite" % time.strftime("%Y%m%d-%H%M%S"))
     _online_backup(dest)
     _cleanup(INTRADAY_DIR, "snap-*.sqlite", KEEP_INTRADAY)
 
