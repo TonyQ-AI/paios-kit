@@ -10,9 +10,15 @@ import subprocess, sys
 CREATE_NO_WINDOW = 0x08000000
 
 def main():
-    if len(sys.argv) < 2:
+    args = sys.argv[1:]
+    if not args:
         print("usage: python silent.py <cmd> [args...]"); sys.exit(2)
-    r = subprocess.run(sys.argv[1:], creationflags=CREATE_NO_WINDOW,
+    # MSYS/Git Bash 会把 cmd 的 /c 改写成 C:/ 或吃掉 ——自动纠正（2026-10-02 事故：
+    # `silent.py cmd /c npm run build` 实际空跑，exit 0 假成功，产物未更新却以为构建成功）
+    if args[0].lower() in ("cmd", "cmd.exe") and len(args) >= 2 and args[1].lower() in ("c:/", "c:\\", "c:"):
+        print("[silent] /c 被 MSYS 改写为 %r，已自动纠正为 /c" % args[1], file=sys.stderr)
+        args[1] = "/c"
+    r = subprocess.run(args, creationflags=CREATE_NO_WINDOW,
                        capture_output=True, encoding="gbk", errors="replace")
     if r.stdout: print(r.stdout, end="")
     if r.stderr: print(r.stderr, end="", file=sys.stderr)

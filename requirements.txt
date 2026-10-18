@@ -1,3 +1,7 @@
 # PAIOS 知识层语义查重（bge-small-zh-v1.5，ONNX CPU 推理）
 # Web 层与索引层全部为 Python 标准库，无其他第三方依赖。
 fastembed>=0.3
+
+# 可选（不装也能跑）：DSH 备份链/导出与 zcode 增量 base 压缩使用 zstandard；
+# 缺失时自动降级（zstd 相关功能禁用 / gzip 兜底），ZCode 记忆基座不受影响。
+# zstandard>=0.22

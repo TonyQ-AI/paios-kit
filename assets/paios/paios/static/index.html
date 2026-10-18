@@ -86,6 +86,11 @@
         <option value="archived">📦 已归档</option>
         <option value="trash">🗑 垃圾箱</option>
       </select>
+      <select id="ssource" onchange="loadSessions()" title="按来源筛选：ZCode 主库 / DSH 容器">
+        <option value="">全部来源</option>
+        <option value="zcode">仅 ZCode</option>
+        <option value="dsh">仅 DSH</option>
+      </select>
       <select id="stype" onchange="loadSessions()">
         <option value="">全部类型</option>
         <option>桌面应用</option>
@@ -107,8 +112,11 @@
         <option value="created">最近创建优先</option>
         <option value="created_asc">最早创建优先</option>
       </select>
-      <label class="meta" style="display:flex;gap:4px;align-items:center;cursor:pointer" title="勾选后取消应用类型分组，全部会话按所选时间序平铺">
-        <input type="checkbox" id="sflat" onchange="loadSessions()">平铺不分组</label>
+      <select id="sgby" onchange="loadSessions()" title="分组方式：按来源可把 ZCode / DSH 两块完全分开">
+        <option value="source">按来源分组</option>
+        <option value="app">按应用类型分组</option>
+        <option value="flat">平铺（按时间）</option>
+      </select>
       <select id="sproj"><option value="">全部项目</option></select>
       <button onclick="loadSessions()">搜索</button>
       <button class="ghost" onclick="clearSessionFilters()">✕ 清除筛选</button>
@@ -135,8 +143,14 @@
         <option value="draft">待审草稿 draft</option>
         <option value="deprecated">已废弃</option>
       </select>
+      <select id="asrc" onchange="loadAtoms()" title="按提炼来源筛选（依据 source_ref / source 字段判定）">
+        <option value="">全部来源</option>
+        <option value="zcode">来自 ZCode 会话</option>
+        <option value="dsh">来自 DSH 会话</option>
+        <option value="none">未标注来源</option>
+      </select>
       <button onclick="loadAtoms()">检索</button>
-      <button class="ghost" onclick="$('#aq').value=''; $('#aproj').value=''; $('#ast').value=''; loadAtoms()">✕ 清除筛选</button>
+      <button class="ghost" onclick="$('#aq').value=''; $('#aproj').value=''; $('#ast').value=''; $('#asrc').value=''; loadAtoms()">✕ 清除筛选</button>
       <button class="ghost" onclick="loadAtoms('')">刷新</button>
     </div>
     <div class="bar" id="batchbar">
@@ -162,6 +176,11 @@
       <select id="csort" onchange="loadCands()">
         <option value="pain">按痛点分排序（最痛在前）</option>
         <option value="time">按最近更新排序</option>
+      </select>
+      <select id="csrc" onchange="loadCands()" title="按会话来源筛选">
+        <option value="">全部来源</option>
+        <option value="zcode">仅 ZCode</option>
+        <option value="dsh">仅 DSH</option>
       </select>
       <button class="ghost" onclick="pickAllCands(true)">全选</button>
       <button class="ok" onclick="batchDoneCands()">✓ 已处理所选</button>
@@ -193,7 +212,12 @@ async function api(path, opts) { const r = await fetch(path, opts); return r.jso
 async function loadStats() {
   try {
     const s = await api('/api/stats');
-    $('#stat').textContent = `${s.total} 会话已归档 ｜ 📦 ${s.archived} ｜ 🗑 ${s.trashed}`;
+    const tops = s.total - (s.children || 0);
+    const bs = s.by_source || {};
+    $('#stat').textContent = `${tops} 会话已归档` +
+      `（ZCode ${bs.zcode || 0} · DSH ${bs.dsh || 0}）` +
+      (s.children ? `，另有 ${s.children} 个子代理会话已索引·默认隐藏` : '') +
+      ` ｜ 📦 ${s.archived} ｜ 🗑 ${s.trashed}`;
     const c = await api('/api/candidates?limit=99');
     const b = $('#cbadge');
     b.textContent = c.length; b.classList.toggle('hidden', !c.length);
@@ -219,12 +243,24 @@ const SESS_BTNS = {
 
 async function loadSessions() {
   const q = $('#sq').value.trim(), proj = $('#sproj').value, state = $('#sstate').value;
-  let rows = await api(`/api/sessions?q=${encodeURIComponent(q)}&project=${encodeURIComponent(proj)}&state=${state}&order=${$('#sorder').value}&limit=200`);
-  if (!$('#sproj').options.length > 1) {}
-  const projs = [...new Set(rows.map(r => r.project_key))].sort();
+  const src = $('#ssource').value;
+  let rows = await api(`/api/sessions?q=${encodeURIComponent(q)}&project=${encodeURIComponent(proj)}&state=${state}&source=${src}&order=${$('#sorder').value}&limit=200`);
   const sel = $('#sproj');
   if (sel.dataset.loaded !== '1') {
-    projs.forEach(p => { const o = document.createElement('option'); o.value = o.textContent = p; sel.appendChild(o); });
+    // 项目下拉：取「全部已知项目」（会话聚合 + 工作区目录扫描挂载，含暂无会话的）
+    // value 保持原始 project_key（筛选/gotoProject 依赖它），后缀只做显示
+    let opts = [];
+    try {
+      const ps = await api('/api/projects');
+      opts = ps.map(p => ({ key: p.project_key,
+                            label: p.dir_only ? p.project_key + '（仅目录·无会话）' : p.project_key }));
+    } catch (e) {}
+    const seen = new Set(opts.map(o => o.key));
+    rows.forEach(r => {
+      if (r.project_key && !seen.has(r.project_key)) { seen.add(r.project_key); opts.push({ key: r.project_key, label: r.project_key }); }
+    });
+    opts.sort((a, b) => a.key.localeCompare(b.key));
+    opts.forEach(o => { const el = document.createElement('option'); el.value = o.key; el.textContent = o.label; sel.appendChild(el); });
     sel.dataset.loaded = '1';
   }
   $('#sbatchbtns').innerHTML = SESS_BTNS[state] || '';
@@ -243,29 +279,36 @@ async function loadSessions() {
     footer = `<div class="card" style="text-align:center;cursor:pointer;color:#8a94a8" onclick="$('#sstate').value='active';loadSessions()">↩ 返回当前会话</div>
       <div class="card" style="text-align:center;cursor:pointer;color:#8a94a8" onclick="$('#sstate').value='trash';loadSessions()">🗑 垃圾箱 ${s.trashed} 条 · 点开查看</div>`;
   }
-  $('#slist').innerHTML = (rows.length ? sessTable(rows, state, $('#sflat').checked)
+  $('#slist').innerHTML = (rows.length ? sessTable(rows, state, $('#sgby').value)
     : '<div class="empty">' + (state === 'trash' ? '垃圾箱为空' : state === 'archived' ? '还没有归档的会话' : '无匹配会话') + '</div>') + footer;
 }
 
-function sessTable(rows, state, flat) {
-  // 按应用类型分组展示（大类，可点击折叠），组内保持排序；flat=平铺不分组
-  const order = ['桌面应用', 'Web应用', '工具/脚本', '文档/资料', '其他', '未归类'];
+function sessTable(rows, state, gby) {
+  // 分组展示：source=按来源（ZCode / DSH 各自独立成块）/ app=按应用类型 / flat=平铺
+  const appOrder = ['桌面应用', 'Web应用', '工具/脚本', '文档/资料', '其他', '未归类'];
+  const srcOrder = ['ZCode', 'DSH'];
   const groups = {};
-  if (flat) {
+  if (gby === 'flat') {
     groups[''] = rows;
+  } else if (gby === 'source') {
+    rows.forEach(r => { const k = r.source === 'dsh' ? 'DSH' : 'ZCode'; (groups[k] = groups[k] || []).push(r); });
   } else {
     rows.forEach(r => { (groups[r.app_type] = groups[r.app_type] || []).push(r); });
   }
-  const keys = flat ? [''] : Object.keys(groups).sort((a, b) => order.indexOf(a) - order.indexOf(b));
+  const keys = gby === 'flat' ? [''] : gby === 'source' ? srcOrder.filter(k => groups[k])
+    : Object.keys(groups).sort((a, b) => appOrder.indexOf(a) - appOrder.indexOf(b));
   let gi = 0;
   let html = `<table class="stable"><thead><tr>
     <th style="width:26px"></th><th>会话</th><th>项目</th><th>原子</th><th>备注</th><th>📁 文件</th><th>💬 消息</th><th>时间</th><th></th>
   </tr></thead>`;
   for (const k of keys) {
     const gid = 'sg-' + gi++;
-    if (!flat) {
-      html += `<tr class="ghead" style="cursor:pointer" onclick="toggleGrp('${gid}',this)" title="点击折叠/展开">
-      <td colspan="9"><span class="garr">▾</span> ▍${esc(k)}（${groups[k].length}）</td></tr>`;
+    if (gby !== 'flat') {
+      const hint = gby === 'source'
+        ? (k === 'DSH' ? 'DeepSeek Harness 会话（.dsh 容器只读直读入索引）' : 'ZCode 主库会话')
+        : '点击折叠/展开';
+      html += `<tr class="ghead" style="cursor:pointer" onclick="toggleGrp('${gid}',this)" title="${hint}">
+      <td colspan="9"><span class="garr">▾</span> ▍${gby === 'source' ? (k === 'DSH' ? '🟦 ' : '🟩 ') : ''}${esc(k)}（${groups[k].length}）</td></tr>`;
     } else {
       html += `<tr class="ghead"><td colspan="9">🕐 按时间平铺（${rows.length} 条，${$('#sorder').selectedOptions[0].textContent}）</td></tr>`;
     }
@@ -273,7 +316,7 @@ function sessTable(rows, state, flat) {
       const sid = r.session_id, sd = 'sd-' + sid.slice(-8);
       html += `<tr class="srow ${gid}">
         <td><input type="checkbox" class="spick" value="${sid}" onchange="updateSPickInfo()"></td>
-        <td><span class="t cell-clip" style="display:inline-block" onclick="toggleDetail('${sd}')" title="${esc(r.title)}">${esc(r.title)}</span></td>
+        <td>${r.source === 'dsh' ? '<span style="font-size:10px;padding:1px 4px;border-radius:3px;background:#1f3a5f;color:#9fc7ff;margin-right:4px" title="DeepSeek Harness 会话（.dsh 容器直读入索引）">DSH</span>' : ''}<span class="t cell-clip" style="display:inline-block" onclick="toggleDetail('${sd}')" title="${esc(r.title)}">${esc(r.title)}</span></td>
         <td class="meta cell-clip" style="max-width:130px"><span style="cursor:pointer" onclick="gotoProject('${esc(r.project_key)}')" title="点击筛选该项目">${esc(r.project_key)}</span></td>
         <td class="meta" style="white-space:nowrap;cursor:pointer" title="点击查看该项目的知识原子" onclick="gotoAtoms('${esc(r.project_key)}')">🧠${r.proj_atoms || 0}</td>
         <td class="meta" style="max-width:150px"><span class="cell-clip" style="display:inline-block;cursor:text" data-sid="${sid}" data-raw="${esc(r.notes)}" onclick="editNote(this)" title="${esc(r.notes)}">${r.notes ? esc(r.notes) : '<span style="color:#3d4a63">＋</span>'}</span></td>
@@ -428,13 +471,14 @@ function clearSessionFilters() {
   $('#sproj').value = '';
   $('#stype').value = '';
   $('#sps').value = '';
-  $('#sflat').checked = false;
+  $('#ssource').value = '';
+  $('#sgby').value = 'source';
   $('#sstate').value = 'active';
   loadSessions();
 }
 
 function extractPrompt(sid) {
-  const p = `请把这个 ZCode 会话提炼为经验原子。用 paios_get_session_md 工具读取会话 ${sid} 的原文，按 7 字段（任务背景/人的判断/判断理由/AI错误/修正方案/最终结果/适用边界）提炼 1~N 条，用 paios_save_atom 存为草稿。`;
+  const p = `请把这个会话（ZCode 或 DSH 来源均可）提炼为经验原子。用 paios_get_session_md 工具读取会话 ${sid} 的原文，按 7 字段（任务背景/人的判断/判断理由/AI错误/修正方案/最终结果/适用边界）提炼 1~N 条，用 paios_save_atom 存为草稿。`;
   navigator.clipboard.writeText(p);
 }
 
@@ -472,11 +516,13 @@ async function loadAtoms() {
   sel.innerHTML = '<option value="">全部项目</option>' +
     projs.map(p => `<option value="${esc(p)}"${p === cur ? ' selected' : ''}>${esc(p)}</option>`).join('');
   if (cur) rows = rows.filter(r => r.project === cur);
+  const srcf = $('#asrc').value;
+  if (srcf) rows = rows.filter(r => (r.session_source || '') === (srcf === 'none' ? '' : srcf));
   $('#alist').innerHTML = rows.length ? rows.map(a => `
     <div class="card">
       <div class="row">
         <span class="t" onclick="atomDetail('${a.id}')">${a.id} ${esc(a.title)}</span>
-        <span class="meta"><span class="st-${a.status}">${a.status}</span> ｜ ${esc(a.type)} ｜ ${a.date} ｜ ${esc(a.project || '-')}</span>
+        <span class="meta"><span class="st-${a.status}">${a.status}</span> ｜ ${esc(a.type)} ｜ ${a.date} ｜ ${esc(a.project || '-')} ｜ ${a.session_source === 'dsh' ? '<span class="tag" style="background:#1f3a5f;color:#9fc7ff" title="提炼自 DSH 会话">DSH</span>' : a.session_source === 'zcode' ? '<span class="tag" title="提炼自 ZCode 会话">ZCode</span>' : '<span title="source_ref 为空或非会话来源">未标注</span>'}</span>
       </div>
       <div class="desc">${esc(a.one_liner)}</div>
       ${(a.family && a.family.length) ? `<div class="desc">🧬 同族：${a.family.map(f => `<span class="tag">${esc(f)}</span>`).join(' ')}${a.family_note ? ' ｜ ' + esc(a.family_note) : ''}</div>` : ''}
@@ -709,7 +755,9 @@ async function promoteRule(id, promote) {
 // ---------- candidates ----------
 async function loadCands() {
   const sort = $('#csort').value;
-  const rows = await api('/api/candidates?sort=' + sort + '&limit=99');
+  let rows = await api('/api/candidates?sort=' + sort + '&limit=99');
+  const srcf = $('#csrc').value;
+  if (srcf) rows = rows.filter(c => (c.source || 'zcode') === srcf);
   const pain = sort === 'pain';
   $('#clist').innerHTML = rows.length ? rows.map((c, i) => `
     <div class="card">
@@ -717,7 +765,7 @@ async function loadCands() {
         <span style="display:flex;gap:8px;align-items:center">
           <input type="checkbox" class="cpick" value="${c.session_id}">
           <span class="t" onclick="toggleDetail('cd-${c.session_id.slice(-8)}')">
-            ${pain ? `<span class="tag">${c.score >= 200 ? '🔥' : c.score >= 100 ? '🟠' : '⚪'} ${c.score}</span> ` : ''}${i + 1}. ${esc(c.title)}
+            ${pain ? `<span class="tag">${c.score >= 200 ? '🔥' : c.score >= 100 ? '🟠' : '⚪'} ${c.score}</span> ` : ''}${i + 1}. ${c.source === 'dsh' ? '<span class="tag" style="background:#1f3a5f;color:#9fc7ff" title="DSH 会话">DSH</span> ' : ''}${esc(c.title)}
           </span>
         </span>
         <span class="meta">${pain

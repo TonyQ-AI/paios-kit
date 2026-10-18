@@ -20,7 +20,10 @@ def _ensure_columns(con):
                 "worth_reason TEXT DEFAULT ''",
                 "extracted INTEGER DEFAULT 0",
                 "archived INTEGER DEFAULT 0",
-                "trashed INTEGER DEFAULT 0"):
+                "trashed INTEGER DEFAULT 0",
+                "delegation_depth INTEGER DEFAULT 0",
+                "source TEXT DEFAULT 'zcode'",
+                "container_path TEXT DEFAULT ''"):
         try:
             con.execute("ALTER TABLE sessions ADD COLUMN %s" % col)
         except Exception:
@@ -33,7 +36,8 @@ def mark():
     _ensure_columns(con)
     rows = con.execute(
         "SELECT session_id, n_messages, n_file_ops, additions, deletions, files_json "
-        "FROM sessions WHERE worth_extracting=0 AND extracted=0 AND trashed=0").fetchall()
+        "FROM sessions WHERE worth_extracting=0 AND extracted=0 AND trashed=0 "
+        "AND COALESCE(delegation_depth,0)=0").fetchall()
     marked = 0
     for sid, nmsg, nfops, add, dele, fj in rows:
         reasons = []
@@ -70,7 +74,8 @@ def pain_detail(session_id, max_errors=12):
     from . import indexer
     con = sqlite3.connect(str(INDEX_DB))
     _ensure_columns(con)
-    row = con.execute("SELECT summary, files_json FROM sessions WHERE session_id=?",
+    row = con.execute("SELECT summary, files_json, COALESCE(source,'zcode'), "
+                      "container_path FROM sessions WHERE session_id=?",
                       (session_id,)).fetchone()
     con.close()
     summary, fj = (row[0], row[1]) if row else ("", "{}")
@@ -79,6 +84,19 @@ def pain_detail(session_id, max_errors=12):
     except Exception:
         files = {}
     top_files = sorted(files.items(), key=lambda x: -x[1])[:10]
+
+    # DSH 来源：原文在 ~/.dsh 容器里，ZCode 主库查不到它的对话
+    if row and row[2] == "dsh":
+        lines = []
+        try:
+            from .sources import dsh as _dsh
+            container = row[3] or _dsh.find_container(session_id)
+            if container:
+                lines = _dsh.error_lines(container, _ERR_RE, max_errors)
+        except Exception:
+            lines = []
+        return {"summary": summary or "", "top_files": top_files,
+                "error_lines": lines}
 
     lines, seen = [], set()
     src = indexer._open_source()
@@ -123,6 +141,7 @@ def list_candidates(limit=50):
     rows = con.execute(
         "SELECT session_id, title, project_key, worth_reason, t_updated "
         "FROM sessions WHERE worth_extracting=1 AND extracted=0 AND trashed=0 "
+        "AND COALESCE(delegation_depth,0)=0 "
         "ORDER BY t_updated DESC LIMIT ?", (limit,)).fetchall()
     con.close()
     return rows
@@ -143,7 +162,8 @@ def list_ranked(limit=50):
     rows = con.execute(
         "SELECT session_id, title, project_key, worth_reason, t_updated, t_created,"
         " n_messages, n_file_ops, additions, deletions, files_json, summary "
-        "FROM sessions WHERE worth_extracting=1 AND extracted=0 AND trashed=0").fetchall()
+        "FROM sessions WHERE worth_extracting=1 AND extracted=0 AND trashed=0 "
+        "AND COALESCE(delegation_depth,0)=0").fetchall()
     con.close()
     out = []
     for sid, title, proj, reason, tu, tc, nmsg, nfops, add, dele, fj, summary in rows:

@@ -16,27 +16,31 @@ TOOLS = [
     {
         "name": "paios_search_sessions",
         "description": (
-            "搜索用户的 ZCode 对话历史索引（记忆基座·归档层）。"
+            "搜索用户的历史会话索引（记忆基座·归档层）：ZCode 主库 + DSH(.dsh 容器) 两个来源。"
             "按关键词匹配标题/摘要/项目名/涉及文件路径，返回会话列表"
-            "（含归属项目、时间、改动概况）。"
+            "（含归属项目、来源、时间、改动概况；子代理会话默认不列）。"
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "query": {"type": "string", "description": "关键词，如：录屏图标"},
                 "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 10},
+                "source": {"type": "string", "enum": ["zcode", "dsh"],
+                           "description": "只看某个来源（可选）：zcode=ZCode 主库，dsh=DeepSeek Harness"},
             },
             "required": ["query"],
         },
     },
     {
         "name": "paios_recent_sessions",
-        "description": "列出最近活跃的 ZCode 会话及其归属项目。",
+        "description": "列出最近活跃的会话（ZCode + DSH）及其归属项目。",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 8},
                 "project": {"type": "string", "description": "只看某个项目（可选）"},
+                "source": {"type": "string", "enum": ["zcode", "dsh"],
+                           "description": "只看某个来源（可选）：zcode / dsh"},
             },
         },
     },
@@ -90,7 +94,8 @@ TOOLS = [
                 "tags": {"type": "array", "items": {"type": "string"}},
                 "project": {"type": "string", "description": "所属项目（可选）"},
                 "source": {"type": "string",
-                           "description": "zcode-session | 豆包 | 其他，默认 zcode-session"},
+                           "description": "zcode-session | dsh-session | 豆包 | 其他，默认 zcode-session。"
+                                          "source_ref 为 session-/UUID 时会自动改为 dsh-session"},
                 "source_ref": {"type": "string",
                                "description": "溯源：sess_xxx 或 REQ 单号等"},
                 "status": {"type": "string", "enum": ["draft", "active"],
@@ -172,6 +177,7 @@ def _fmt_session_row(s, with_files=False):
         if s.get("t_updated") else "?"
     line = (f"- [{t}] {s['title']} ｜ 项目: {s['project_key']}"
             f"({'低置信' if s['confidence'] == 'low' else s['confidence']})"
+            f" ｜ 来源: {'DSH' if (s.get('source') or 'zcode') == 'dsh' else 'ZCode'}"
             f" ｜ 会话ID: {s['session_id']}")
     if s.get("n_file_ops"):
         line += f" ｜ {s['n_file_ops']} 次文件操作 +{s['additions']}/-{s['deletions']}"
@@ -199,8 +205,9 @@ def call_tool(name, args):
     args = args or {}
     if name == "paios_search_sessions":
         q = str(args.get("query") or "")
-        indexer.sync()  # 确保新鲜
-        rows = indexer.query_sessions(q=q, limit=int(args.get("limit", 10)))
+        indexer.sync(throttle=20)  # 确保新鲜（20s 节流：工具调用可能很密集）
+        rows = indexer.query_sessions(q=q, limit=int(args.get("limit", 10)),
+                                      source=str(args.get("source") or ""))
         if not rows:
             return f"没有匹配 “{q}” 的会话。可以试试其他关键词。"
         lines = [f"找到 {len(rows)} 条与 “{q}” 相关的会话："] + \
@@ -208,9 +215,10 @@ def call_tool(name, args):
         return "\n".join(lines)
 
     if name == "paios_recent_sessions":
-        indexer.sync()
+        indexer.sync(throttle=20)
         rows = indexer.query_sessions(project=args.get("project", ""),
-                                      limit=int(args.get("limit", 8)))
+                                      limit=int(args.get("limit", 8)),
+                                      source=str(args.get("source") or ""))
         if not rows:
             return "索引为空。"
         return "\n".join([f"最近 {len(rows)} 个会话："] +
@@ -218,7 +226,7 @@ def call_tool(name, args):
 
     if name == "paios_get_session":
         sid = args.get("session_id", "")
-        rows = indexer.query_sessions(limit=5000)
+        rows = indexer.query_sessions(limit=5000, include_children=True)
         hit = next((r for r in rows if r["session_id"] == sid), None)
         if not hit:
             cand = [r for r in rows if r["session_id"].find(sid) >= 0 and sid]
@@ -240,10 +248,16 @@ def call_tool(name, args):
 
     if name == "paios_list_projects":
         ps = indexer.query_projects()
-        return "索引中的项目：\n" + "\n".join(
-            f"- {p['project_key']}: {p['sessions']} 个会话，"
-            f"最近 {__import__('datetime').datetime.fromtimestamp(p['last_active']/1000).strftime('%m-%d %H:%M')}"
-            for p in ps)
+        import datetime as _dt
+        lines = ["项目列表（含工作区目录扫描挂载、暂无会话的项目）："]
+        for p in ps:
+            la = p.get("last_active") or 0
+            when = (_dt.datetime.fromtimestamp(la / 1000).strftime("%m-%d %H:%M")
+                    if la else "未知")
+            lines.append("- %s: %d 个会话，最近 %s%s"
+                         % (p["project_key"], p["sessions"], when,
+                            "｜仅目录（无会话）" if p.get("dir_only") else ""))
+        return "\n".join(lines)
 
     if name == "paios_search_atoms":
         hits = atoms.search_atoms(str(args.get("query") or ""),
@@ -371,6 +385,15 @@ def handle(msg):
 
 
 def main():
+    # MCP over stdio 规定 UTF-8：中文 Windows 下裸 stdout 走 locale(cp936)，
+    # 会把含中文的响应写成 GBK 字节（工具描述与返回值全部乱码，任何按规范
+    # 解码的客户端都读不了）。必须显式 reconfigure——与 workflow.py 同惯例，
+    # 且优于 PYTHONIOENCODING 环境变量（打包 exe 不读该变量，见 A-0020）。
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
     # 关键：stdout 只能输出协议帧，业务日志全走 stderr
     for raw in sys.stdin:
         raw = raw.strip()

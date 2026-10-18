@@ -70,7 +70,8 @@ class Handler(BaseHTTPRequestHandler):
                     q=qs.get("q", ""), project=qs.get("project", ""),
                     limit=min(int(qs.get("limit", 200)), 1000),
                     order=qs.get("order", "updated"),
-                    state=qs.get("state", "active"))
+                    state=qs.get("state", "active"),
+                    source=qs.get("source", ""))
                 counts = atoms.count_by_project()
                 for r in rows:
                     r["proj_atoms"] = counts.get(r["project_key"], 0)
@@ -145,6 +146,7 @@ class Handler(BaseHTTPRequestHandler):
                         "tags": meta.get("tags") if isinstance(meta.get("tags"), list) else [],
                         "project": meta.get("project", ""), "date": meta.get("date"),
                         "source": meta.get("source"), "source_ref": meta.get("source_ref"),
+                        "session_source": atoms.session_source(meta),
                         "one_liner": m.group(1).strip() if m else "",
                         "rule": meta.get("rule", ""),
                         "family": meta.get("family") if isinstance(meta.get("family"), list) else [],
@@ -167,10 +169,15 @@ class Handler(BaseHTTPRequestHandler):
             if u.path == "/api/candidates":
                 if qs.get("sort", "pain") == "time":
                     rows = candidates.list_candidates(int(qs.get("limit", 50)))
-                    return self._json([
-                        {"session_id": r[0], "title": r[1], "project_key": r[2],
-                         "reason": r[3], "t_updated": r[4]} for r in rows])
-                return self._json(candidates.list_ranked(int(qs.get("limit", 50))))
+                    data = [{"session_id": r[0], "title": r[1], "project_key": r[2],
+                             "reason": r[3], "t_updated": r[4]} for r in rows]
+                else:
+                    data = candidates.list_ranked(int(qs.get("limit", 50)))
+                # 来源标注（一次查表；不改 candidates 模块的返回契约）
+                src = indexer.session_sources([d["session_id"] for d in data])
+                for d in data:
+                    d["source"] = src.get(d["session_id"], "")
+                return self._json(data)
 
             if u.path == "/api/atom_similar":
                 aid = qs.get("id", "")
@@ -354,6 +361,27 @@ def _open_in_explorer(path):
     return False
 
 
+def _dsh_autosync(interval=120):
+    """后台增量同步 DSH 源（UI 常驻时 DSH 会话自动进索引）。
+
+    刻意只同步 DSH：ZCode 主源的节奏由它的 Stop hook 负责，这里重复扫是浪费。
+    DSH 源不可用（没装 DSH / 没装 zstd 解码器）时 sync 静默返回，不打印噪音。
+    """
+    import sys
+    import time
+    import traceback
+    while True:
+        try:
+            st = indexer.sync(sources=("dsh",), throttle=0)
+            if st.get("dsh_new") or st.get("dsh_updated"):
+                print("[paios] DSH 会话增量：新增 %s / 更新 %s" %
+                      (st.get("dsh_new"), st.get("dsh_updated")),
+                      file=sys.stderr, flush=True)
+        except Exception:
+            traceback.print_exc(file=sys.stderr)
+        time.sleep(interval)
+
+
 def serve(port=DEFAULT_PORT, open_browser=True):
     """启动 UI 服务。
 
@@ -362,6 +390,8 @@ def serve(port=DEFAULT_PORT, open_browser=True):
     「开着不用」也长期付这份内存（实测 632MB 私有提交的主因，见交接 #33）。
     """
     ensure_data_dir()
+    # DSH 会话自动入索引：UI 常驻时每 120s 增量扫一次 ~/.dsh（只读、失败静默）
+    threading.Thread(target=_dsh_autosync, daemon=True).start()
     srv = ThreadingHTTPServer(("127.0.0.1", port), Handler)
     url = f"http://127.0.0.1:{port}/"
     print(f"PAIOS UI: {url}  (Ctrl+C 退出)")

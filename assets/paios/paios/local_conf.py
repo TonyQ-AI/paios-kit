@@ -9,6 +9,8 @@
               （仅当环境变量 PAIOS_GIT_PROXY 未设置且该端口确实在监听时启用）
   offsite_dir 主库异地周备份目标目录，如 "D:\\paios-backup"
               （缺失 = 不做异地备份）
+  dsh_offsite_dir DSH 数据快照（sessions/storages/profiles）的异地目录，
+              如 "D:\\paios-dsh-backup"（缺失 = DSH 快照只留本地）
 
 为什么放 data/ 而不是写进代码：分发包按白名单复制 `paios/` 包源码，
 data/ 目录由安装器在目标机新建，个人路径与端口永远不会被打包带走。

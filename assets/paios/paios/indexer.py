@@ -11,6 +11,7 @@ import json
 import os
 import re
 import sqlite3
+import time
 from collections import Counter
 from datetime import datetime
 
@@ -45,6 +46,15 @@ CREATE TABLE IF NOT EXISTS sessions(
   extracted    INTEGER DEFAULT 0,
   archived     INTEGER DEFAULT 0,
   trashed      INTEGER DEFAULT 0,
+  -- 多源（2026-10-18 加入 DSH）：source 区分 zcode/dsh；
+  -- delegation_depth>0 是子代理会话（入索引但默认视图隐藏）
+  source       TEXT DEFAULT 'zcode',
+  delegation_depth INTEGER DEFAULT 0,
+  parent_session_id TEXT DEFAULT '',
+  agent_preset TEXT DEFAULT '',
+  is_seeded    INTEGER DEFAULT 0,
+  origin       TEXT DEFAULT '',
+  container_path TEXT DEFAULT '',
   t_created    INTEGER,
   t_updated    INTEGER
 );
@@ -72,7 +82,14 @@ def _open_index():
                 "project_type TEXT DEFAULT ''", "notes TEXT DEFAULT ''",
                 "worth_extracting INTEGER DEFAULT 0", "worth_reason TEXT DEFAULT ''",
                 "extracted INTEGER DEFAULT 0",
-                "archived INTEGER DEFAULT 0", "trashed INTEGER DEFAULT 0"):
+                "archived INTEGER DEFAULT 0", "trashed INTEGER DEFAULT 0",
+                "source TEXT DEFAULT 'zcode'",
+                "delegation_depth INTEGER DEFAULT 0",
+                "parent_session_id TEXT DEFAULT ''",
+                "agent_preset TEXT DEFAULT ''",
+                "is_seeded INTEGER DEFAULT 0",
+                "origin TEXT DEFAULT ''",
+                "container_path TEXT DEFAULT ''"):
         try:
             con.execute(f"ALTER TABLE sessions ADD COLUMN {col}")
         except Exception:
@@ -255,15 +272,17 @@ def make_files_json(paths):
 # ---------------------------------------------------------------- 同步
 
 def rebuild_all():
-    """丢弃索引，全量重建。"""
+    """丢弃索引，全量重建（两个源的水位线一起清）。"""
     con = _open_index()
     con.execute("DELETE FROM sessions")
     _set_meta(con, "watermark_ms", 0)
+    _set_meta(con, "dsh_watermark_ms", 0)
+    _set_meta(con, "dsh_retry", "{}")
     con.commit()
     con.close()
 
 
-def sync(verbose=False):
+def _sync_zcode(verbose=False):
     icon = _open_index()
     src = _open_source()
     watermark = int(_get_meta(icon, "watermark_ms") or 0)
@@ -401,20 +420,210 @@ def sync(verbose=False):
     return stats
 
 
+# ---------------------------------------------------------------- DSH 源（第二来源）
+
+def _dsh_source():
+    from .sources import dsh as mod
+    return mod
+
+
+def _upsert_dsh_session(icon, rec, ctx):
+    """把一条 DSH 会话记录写进索引（幂等 upsert；人工归属不被覆盖）。
+
+    rec 由 sources/dsh.py 解析容器得到，字段口径与 ZCode 侧对齐：
+    n_messages=用户+助手消息数、n_tools=tool/call 数、n_file_ops=唯一文件路径数。
+    additions/deletions 恒 0：DSH 容器里没有行数统计，不臆造。
+    """
+    from pathlib import Path as _P
+    sid = rec["session_id"]
+    roots, registered, nodes, folder_names = ctx
+    info = {"directory": rec.get("directory") or "",
+            "title": rec.get("title") or "",
+            "_first_msg": rec.get("first_message") or ""}
+    ops = rec.get("paths") or []
+
+    prev = icon.execute("SELECT project_key, project_path, confidence, project_desc, "
+                        "project_maturity, archived, trashed FROM sessions "
+                        "WHERE session_id=?", (sid,)).fetchone()
+    if prev and prev[2] == "manual":
+        cls = {"project_key": prev[0], "project_path": prev[1], "confidence": "manual"}
+    else:
+        cls = classify_session(info, ops, roots, folder_names,
+                               nodes=nodes, registered_roots=registered)
+
+    pp = cls.get("project_path", "")
+    pk = cls.get("project_key", "")
+    if pp and pk and pk != "未归类":
+        pp_lower = pp.replace("/", "\\").rstrip("\\").lower()
+        if not pp_lower.endswith(pk.lower()):
+            cand = _P(pp) / pk
+            if cand.is_dir():
+                pp = str(cand)
+    if not pp and pk and pk != "未归类":
+        for root_dir in roots:
+            cand = _P(root_dir) / pk
+            if cand.is_dir():
+                pp = str(cand)
+                break
+
+    if prev and prev[3]:
+        pdesc, pmaturity = prev[3], prev[4] or ""
+    else:
+        pdesc = read_project_desc(pp, pk) if pp else ""
+        pmaturity = ""
+    if pp and (not pmaturity or not prev):
+        mat = assess_project(pp)
+        pmaturity = (f"{mat['icon']} {mat['label']}({mat['score']}分) "
+                     f"{' '.join(mat['details'])}")
+    ptype = classify_type(pp) if pp else ""
+
+    fm = (rec.get("first_message") or "")[:1000]
+    title = (rec.get("title") or fm or "(无标题)")[:200]
+    summary = make_summary(rec, fm)
+    files = json.dumps(make_files_json(ops), ensure_ascii=False)
+
+    base = (title, summary, rec.get("n_messages", 0), rec.get("n_tools", 0),
+            rec.get("n_file_ops", 0), 0, 0, files, fm, rec.get("t_updated", 0),
+            cls["project_key"], pp, cls["confidence"], pdesc, pmaturity, ptype,
+            "dsh", rec.get("delegation_depth", 0),
+            rec.get("parent_session_id", "") or "", rec.get("agent_preset", "") or "",
+            rec.get("is_seeded", 0), rec.get("origin", "") or "",
+            rec.get("container", "") or "")
+    if prev:
+        icon.execute("""UPDATE sessions SET title=?,summary=?,n_messages=?,n_tools=?,
+                        n_file_ops=?,additions=?,deletions=?,files_json=?,
+                        first_message=?,t_updated=?,project_key=?,project_path=?,
+                        confidence=?,project_desc=?,project_maturity=?,project_type=?,
+                        source=?,delegation_depth=?,parent_session_id=?,
+                        agent_preset=?,is_seeded=?,origin=?,container_path=?
+                        WHERE session_id=?""", base + (sid,))
+        return False
+    icon.execute("""INSERT INTO sessions(session_id,title,summary,n_messages,n_tools,
+                    n_file_ops,additions,deletions,files_json,first_message,
+                    t_updated,project_key,project_path,confidence,project_desc,
+                    project_maturity,project_type,source,delegation_depth,
+                    parent_session_id,agent_preset,is_seeded,origin,container_path,
+                    title_source,directory,t_created)
+                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                 (sid,) + base + (rec.get("title_source") or "",
+                                  rec.get("directory") or "",
+                                  rec.get("t_created") or 0))
+    return True
+
+
+def _sync_dsh(verbose=False):
+    """DSH 源增量同步：独立水位线 + 失败重试表，与 ZCode 主源完全隔离。"""
+    dsh = _dsh_source()
+    ok, why = dsh.available()
+    out = {"available": ok, "reason": why, "new": 0, "updated": 0,
+           "total": 0, "parsed": 0, "failed": 0, "retrying": 0}
+    if not ok:
+        if verbose:
+            print(json.dumps(out, ensure_ascii=False))
+        return out
+    icon = _open_index()
+    try:
+        try:
+            retry = json.loads(_get_meta(icon, "dsh_retry") or "{}") or {}
+        except Exception:
+            retry = {}
+        out["retrying"] = len(retry)
+        watermark = int(_get_meta(icon, "dsh_watermark_ms") or 0)
+        recs, st = dsh.scan(watermark, force_paths=retry)
+        # 失败表：下轮对这些容器无视水位线重解（容器可能正在写入）
+        _set_meta(icon, "dsh_retry",
+                  json.dumps(st.get("failures") or {}, ensure_ascii=False))
+        if int(st.get("max_mtime_ms") or 0) > watermark:
+            _set_meta(icon, "dsh_watermark_ms", int(st["max_mtime_ms"]))
+        out.update(parsed=st.get("parsed", 0), failed=st.get("failed", 0))
+        if recs:
+            directories = [r.get("directory") for r in recs if r.get("directory")]
+            try:
+                src = _open_source()
+                directories += [r[0] for r in src.execute(
+                    "SELECT DISTINCT directory FROM session WHERE directory IS NOT NULL")]
+                src.close()
+            except Exception:
+                pass
+            registered = load_workspace_roots()
+            roots = collect_roots(directories)
+            nodes = scan_project_nodes(roots + registered)
+            folder_names = list_project_names(roots + registered)
+            ctx = (roots, registered, nodes, folder_names)
+            deleted = {r[0] for r in icon.execute(
+                "SELECT session_id FROM deleted_sessions")}
+            for rec in recs:
+                if rec["session_id"] in deleted:
+                    continue
+                if _upsert_dsh_session(icon, rec, ctx):
+                    out["new"] += 1
+                else:
+                    out["updated"] += 1
+        icon.commit()
+        out["total"] = icon.execute(
+            "SELECT COUNT(*) FROM sessions WHERE COALESCE(source,'zcode')='dsh'"
+        ).fetchone()[0]
+    finally:
+        icon.close()
+    if verbose:
+        print(json.dumps(out, ensure_ascii=False))
+    return out
+
+
+_LAST_SYNC_T = {"t": 0.0}
+
+
+def sync(verbose=False, sources=None, throttle=0):
+    """增量同步（多源）。sources 缺省 = ZCode 主源 + DSH 源。
+
+    调用方可以只同步一个源：`sync(sources=("dsh",))`；DSH 源不可用时
+    **静默降级**（返回 dsh_available=False），不影响 ZCode 主源。
+
+    throttle>0 时，距上次同步不足该秒数直接返回 {"throttled": True}——
+    MCP 工具每次调用都会想「确保新鲜」，没有节流会把增量扫描变成纳秒级抖动。
+    """
+    if throttle:
+        now = time.time()
+        if now - _LAST_SYNC_T["t"] < throttle:
+            return {"throttled": True}
+        _LAST_SYNC_T["t"] = now
+    srcs = list(sources) if sources else ["zcode", "dsh"]
+    out = {"new": 0, "updated": 0, "total": 0}
+    if "zcode" in srcs:
+        out.update(_sync_zcode(verbose=False))
+    if "dsh" in srcs:
+        d = _sync_dsh(verbose=False)
+        out.update({"dsh_new": d["new"], "dsh_updated": d["updated"],
+                    "dsh_total": d["total"], "dsh_available": d["available"],
+                    "dsh_failed": d["failed"]})
+    if verbose:
+        print(json.dumps(out, ensure_ascii=False))
+    return out
+
+
 # ---------------------------------------------------------------- 查询 API
 
 _COLS = ["session_id", "title", "project_key", "project_path", "confidence",
          "summary", "project_desc", "project_maturity", "project_type",
          "n_messages", "n_tools", "n_file_ops", "additions", "deletions",
          "files_json", "first_message", "notes", "t_created", "t_updated",
-         "directory"]
+         "directory", "source", "delegation_depth", "parent_session_id",
+         "agent_preset", "is_seeded", "origin", "container_path"]
 
 
 def query_sessions(q="", project="", limit=200, order="updated", state="active",
-                   _fallback=True):
+                   _fallback=True, include_children=False, source=""):
     icon = _open_index()
     sql = f"SELECT {','.join(_COLS)} FROM sessions WHERE 1=1"
     args = []
+    # 来源过滤：zcode / dsh；空串 = 全部（UI 的「全部来源」）
+    if source:
+        sql += " AND COALESCE(source,'zcode') = ?"
+        args.append(source)
+    # 子代理会话（DSH 的 delegation_depth>0）忠实入索引，但默认视图隐藏：
+    # 一次任务的十几个 subagent 会话否则会淹掉主会话列表、伪造「痛点重复」。
+    if not include_children:
+        sql += " AND COALESCE(delegation_depth,0)=0"
     # 视图状态：active=当前 / archived=已归档 / trash=垃圾箱
     if state == "archived":
         sql += " AND archived=1 AND trashed=0"
@@ -443,7 +652,8 @@ def query_sessions(q="", project="", limit=200, order="updated", state="active",
     if not rows and tokens and len(tokens) > 1 and _fallback:
         icon.close()
         return query_sessions(q=tokens[0], project=project, limit=limit,
-                              order=order, state=state, _fallback=False)
+                              order=order, state=state, _fallback=False,
+                              include_children=include_children, source=source)
     overrides = _status_overrides(icon)
     icon.close()
     out = []
@@ -462,18 +672,78 @@ def query_sessions(q="", project="", limit=200, order="updated", state="active",
     return out
 
 
+# 目录扫描缓存（60s）：项目列表每次打开都会调，扫描不能每次都做
+_SCAN_CACHE = {"t": 0.0, "rows": []}
+_SCAN_TTL = 60.0
+
+
+def _dir_projects():
+    """「仅目录」项目：登记工作区根（+从会话目录推出的根）下扫到的项目节点。
+
+    **跨 agent 自动挂载**：任何 agent（DSH / Codex / 未来工具）在某工作区下
+    新建的项目目录，只要带项目信号文件（AGENTS.md / README / package.json 等，
+    判定复用 classify.scan_project_nodes），**无需任何会话**就能出现在项目列表。
+    结果按 60s 缓存——扫描涉及多目录遍历，不该每次请求都做。
+    """
+    now = time.time()
+    if now - _SCAN_CACHE["t"] < _SCAN_TTL:
+        return _SCAN_CACHE["rows"]
+    roots = list(load_workspace_roots())
+    dirs = []
+    try:
+        src = _open_source()
+        dirs = [r[0] for r in src.execute(
+            "SELECT DISTINCT directory FROM session WHERE directory IS NOT NULL")]
+        src.close()
+    except Exception:
+        pass
+    for r in collect_roots(dirs):
+        if r not in roots:
+            roots.append(r)
+    # 只取「工作区根的直接子目录」作为项目——深度 ≥2 的几乎都是项目内部的
+    # 第三方/子模块目录（如 rea/third_party/pwndbg），收进来会把列表淹掉
+    roots_norm = {os.path.normpath(r).lower() for r in roots}
+    rows = []
+    for node in scan_project_nodes(roots):
+        parent = os.path.normpath(os.path.dirname(str(node))).lower()
+        if parent not in roots_norm:
+            continue
+        key = os.path.basename(str(node).rstrip("\\/")) or str(node)
+        try:
+            mtime_ms = int(os.path.getmtime(node) * 1000)
+        except OSError:
+            mtime_ms = 0
+        rows.append({"project_key": key, "path": str(node), "last_active": mtime_ms})
+    _SCAN_CACHE.update(t=now, rows=rows)
+    return rows
+
+
+def session_sources(ids):
+    """批量取会话来源（候选页/导出标注用）：{session_id: 'zcode'|'dsh'}。"""
+    ids = [x for x in (ids or []) if x]
+    if not ids:
+        return {}
+    con = _open_index()
+    try:
+        q = ("SELECT session_id, COALESCE(source,'zcode') FROM sessions "
+             "WHERE session_id IN (%s)" % ",".join("?" * len(ids)))
+        return dict(con.execute(q, ids))
+    finally:
+        con.close()
+
+
 def query_projects():
     icon = _open_index()
     rows = icon.execute("""
         SELECT project_key, COUNT(*), MAX(t_updated), MIN(project_path)
-        FROM sessions WHERE trashed=0
+        FROM sessions WHERE trashed=0 AND COALESCE(delegation_depth,0)=0
         GROUP BY project_key ORDER BY MAX(t_updated) DESC
     """).fetchall()
     overrides = _status_overrides(icon)
     mats = {}
     for k, m in icon.execute("SELECT project_key, project_maturity FROM sessions "
-                             "WHERE trashed=0 AND project_maturity<>'' "
-                             "ORDER BY t_updated DESC"):
+                             "WHERE trashed=0 AND COALESCE(delegation_depth,0)=0 "
+                             "AND project_maturity<>'' ORDER BY t_updated DESC"):
         mats.setdefault(k, m)
     icon.close()
     out = []
@@ -484,6 +754,21 @@ def query_projects():
         out.append({"project_key": a, "sessions": b, "last_active": c,
                     "path": d, "app_type": app, "status": status,
                     "status_src": "manual" if a in overrides else "auto"})
+    # 合并「仅目录」项目：会话聚合里没有的，按目录扫描补齐（自动挂载，跨 agent）
+    have = {r["project_key"] for r in out}
+    for d in _dir_projects():
+        key = d["project_key"]
+        if key in have:
+            continue
+        have.add(key)
+        path = d["path"]
+        out.append({"project_key": key, "sessions": 0,
+                    "last_active": d["last_active"], "path": path,
+                    "app_type": coarse_type(classify_type(path)) if path else "未归类",
+                    "status": overrides.get(key, ""),
+                    "status_src": "manual" if key in overrides else "auto",
+                    "dir_only": True})
+    out.sort(key=lambda r: -(r.get("last_active") or 0))
     return out
 
 
@@ -497,9 +782,16 @@ def stats():
     trashed = icon.execute(
         "SELECT COUNT(*) FROM sessions WHERE trashed=1").fetchone()[0]
     wm = int(_get_meta(icon, "watermark_ms") or 0)
+    dsh_wm = int(_get_meta(icon, "dsh_watermark_ms") or 0)
+    by_source = dict(icon.execute(
+        "SELECT COALESCE(source,'zcode'), COUNT(*) FROM sessions GROUP BY 1"))
+    children = icon.execute("SELECT COUNT(*) FROM sessions "
+                            "WHERE COALESCE(delegation_depth,0)>0").fetchone()[0]
     icon.close()
     return {"total": total, "unclassified": unclassified,
-            "archived": archived, "trashed": trashed, "last_sync_ms": wm}
+            "archived": archived, "trashed": trashed, "last_sync_ms": wm,
+            "dsh_last_sync_ms": dsh_wm, "by_source": by_source,
+            "children": children}
 
 
 def reassign(session_id, project_key, project_path=None):
@@ -651,7 +943,20 @@ def _esc_fence(t):
 
 
 def export_session_md(session_id):
-    """导出指定会话的完整对话为 Markdown 字符串。"""
+    """导出指定会话的完整对话为 Markdown 字符串（ZCode 主库 / DSH 容器两源）。"""
+    # DSH 来源：原文在 ~/.dsh 容器里，ZCode 主库没有它的 message/part
+    icon = _open_index()
+    srow = icon.execute(
+        "SELECT COALESCE(source,'zcode'), container_path, title, t_updated "
+        "FROM sessions WHERE session_id=?", (session_id,)).fetchone()
+    icon.close()
+    if srow and srow[0] == "dsh":
+        from .sources import dsh as _dsh
+        container = srow[1] or _dsh.find_container(session_id)
+        if not container or not os.path.exists(container):
+            return None
+        return _dsh.render_markdown(
+            container, {"title": srow[2] or "", "t_updated": srow[3] or 0})
     src = _open_source()
     # 会话元信息
     row = src.execute("""

@@ -165,6 +165,35 @@ def list_atoms():
     return out
 
 
+# 会话来源识别（2026-10-18）：原子的 source 字段原本只有 zcode-session|豆包|其他，
+# 接入 DSH 后需要能区分「提炼自哪个 harness 的会话」。判定顺序：
+#   1) source_ref 前缀（sess_ = ZCode；session-<uuid> / 纯 UUID = DSH），最可靠；
+#   2) 否则看 source 字段（dsh-session / zcode-session）；
+#   3) 都没有 → ''（未标注：老原子 source_ref 为空的）。绝不猜。
+_DSH_REF_RE = re.compile(
+    r"^(?:session-[0-9a-fA-F-]{8,}|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$")
+
+
+def session_source(meta_or_ref):
+    """原子来自哪个 harness 的会话：'zcode' / 'dsh' / ''（未标注或非会话来源）。"""
+    if isinstance(meta_or_ref, dict):
+        ref = (meta_or_ref.get("source_ref") or "").strip()
+        src = (meta_or_ref.get("source") or "").strip().lower()
+    else:
+        ref = (meta_or_ref or "").strip()
+        src = ""
+    if ref.lower().startswith("sess_"):
+        return "zcode"
+    if _DSH_REF_RE.match(ref):
+        return "dsh"
+    if src == "dsh-session":
+        return "dsh"
+    if src == "zcode-session":
+        return "zcode"
+    return ""
+
+
 def save_atom(title, atom_type, body, tags=None, project="", source="zcode-session",
               source_ref="", status="draft", date=None, force=False, reviewed=None):
     """写入一条经验原子（门禁+软查重）。返回 (ok, id 或拒绝原因列表)。
@@ -198,6 +227,10 @@ def save_atom(title, atom_type, body, tags=None, project="", source="zcode-sessi
                     "paios_search_atoms 检索并阅读相关原子，把已阅读且判断非重复的 ID "
                     "填入 reviewed 参数后重新提交；确属重复则勿入库；确非重复可 force=true"
                     % (m.get("id"), m.get("title"), chan, s * 100)]
+        # source_ref 指向 DSH 会话时，别把 source 留成默认的 zcode-session 误标
+        if session_source({"source_ref": source_ref, "source": source}) == "dsh" \
+                and (not source or source == "zcode-session"):
+            source = "dsh-session"
         aid = next_id()
         meta = {
             "id": aid,
