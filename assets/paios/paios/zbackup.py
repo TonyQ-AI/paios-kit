@@ -37,7 +37,8 @@ MANIFEST = ZDIR / "manifest.json"
 LOG_FILE = ZDIR / "last-run.log"
 
 KEEP_BASE = 3
-KEEP_DELTA = 48                 # ≈16 小时（20 分钟一份）
+KEEP_DELTA = 504                # 7 天 × 72 份/天（20 分钟一份），与 BASE_MAX_AGE_S 对齐；
+                                # 超上限时重置链（打新 base），绝不删中间 delta 断链
 BASE_MAX_AGE_S = 7 * 86400      # 距上次 base 超过 7 天 → 重新打 base
 MAX_TOTAL_BYTES = 8 * 1024 ** 3  # P1-2（DSH 复查）：新链总容量上限（base+delta）
 DRILL_EVERY_S = 7 * 86400       # 每周演练一次
@@ -485,12 +486,20 @@ def export_delta(label=""):
         "schema_fingerprint": fp2,
     })
     save_manifest(m)
-    _trim_deltas(KEEP_DELTA)
     _enforce_capacity()
-    kept = sorted(DELTA_DIR.glob("delta-*.jsonl.zst"))
-    m["deltas"] = ["delta/" + p.name for p in kept if p.name in
-                   {os.path.basename(d) for d in m["deltas"]}]
-    save_manifest(m)
+    # 链绝不能断：delta 只保留「当前 base 之后」的全部。超过 KEEP_DELTA（7 天，与
+    # BASE_MAX_AGE_S 对齐）时必须重打 base 重置链，不能删最旧 delta——删了 base 与
+    # 剩余 delta 之间就缺一段，恢复必然失败。
+    # （2026-10-23 实际事故：旧值 48 份≈16h，而 base 周级；10-18 的 base + 10-22 起的
+    #   delta，restore 退出码 7，缺 43 条消息 / 185 个 part。）
+    if len(sorted(DELTA_DIR.glob("delta-*.jsonl.zst"))) > KEEP_DELTA:
+        _log("delta count > %d -> reset chain with a fresh base" % KEEP_DELTA)
+        make_base(reason="delta-limit")
+    else:
+        kept = sorted(DELTA_DIR.glob("delta-*.jsonl.zst"))
+        m["deltas"] = ["delta/" + p.name for p in kept if p.name in
+                       {os.path.basename(d) for d in m["deltas"]}]
+        save_manifest(m)
     total = sum(rows_written.values())
     _log("delta OK: %s (%.2f MB, %d 行, %s)" %
          (name, tmp_size / 1048576, total,
@@ -530,6 +539,65 @@ def drill(keep_temp=False):
     return {"ok": ok, "detail": detail}
 
 
+# ---------------------------------------------------------------- 异地同步
+
+def _offsite_chain():
+    """异地同步增量链：当前 base + 全部 delta + manifest（链完整才能恢复）。
+
+    异地目录 = `local_conf.offsite_dir` + `\\chain`（缺配置 → 整体跳过）。
+    只同步「当前链」的文件，异地上的旧 base / 旧 delta 会被清掉（避免异地链错位）。
+    """
+    from . import local_conf
+    offsite = local_conf.get("offsite_dir")
+    if not offsite:
+        return "off"
+    o = Path(offsite) / "chain"
+    (o / "base").mkdir(parents=True, exist_ok=True)
+    (o / "delta").mkdir(parents=True, exist_ok=True)
+    m = load_manifest()
+    if not m.get("base"):
+        return "no-base"
+    base_src = ZDIR / m["base"]
+    if not base_src.exists():
+        return "no-base-file"
+    base_dst = o / m["base"]
+    if not (base_dst.exists()
+            and base_dst.stat().st_size == base_src.stat().st_size):
+        tmp = base_dst.with_name(base_dst.name + ".tmp")
+        shutil.copy2(str(base_src), str(tmp))
+        os.replace(str(tmp), str(base_dst))
+    keep = {os.path.basename(d) for d in (m.get("deltas") or [])}
+    copied = 0
+    for name in keep:
+        src = DELTA_DIR / name
+        dst = o / "delta" / name
+        if not src.exists():
+            continue
+        if dst.exists() and dst.stat().st_size == src.stat().st_size:
+            continue
+        tmp = dst.with_name(dst.name + ".tmp")
+        shutil.copy2(str(src), str(tmp))
+        os.replace(str(tmp), str(dst))
+        copied += 1
+    for p in (o / "delta").glob("delta-*.jsonl.zst"):
+        if p.name not in keep:
+            try:
+                p.unlink()
+            except OSError:
+                pass
+    for p in (o / "base").glob("db-*.sqlite.zst"):
+        if p.name != os.path.basename(m["base"]):
+            try:
+                p.unlink()
+            except OSError:
+                pass
+    # manifest 最后写：恢复端只在 manifest 指向的文件都在时才动手
+    tmpm = o / "manifest.json.tmp"
+    tmpm.write_bytes(MANIFEST.read_bytes())
+    os.replace(str(tmpm), str(o / "manifest.json"))
+    return "copied:%d" % copied
+
+
 # ---------------------------------------------------------------- 主入口（调度用）
 def run(now=None, force_base=False):
     """调度入口：按需打 base / 导出 delta / 每周演练。任何异常都不抛（返回状态）。"""
@@ -550,6 +618,13 @@ def run(now=None, force_base=False):
             if not d.get("ok", False):
                 result["ok"] = False
                 _log("run FAILED: drill failed -> %s" % (d.get("detail") or ""))
+        # 异地同步（链完整才同步；失败不影响本地链）
+        if result.get("ok", False):
+            try:
+                result["offsite"] = _offsite_chain()
+            except Exception as e:
+                _log("offsite failed: %r" % (e,))
+                result["offsite"] = "error"
         return {"ok": result.get("ok", False), "action": act, "result": result}
     except Exception as e:
         _log("run ERROR: %r" % (e,))

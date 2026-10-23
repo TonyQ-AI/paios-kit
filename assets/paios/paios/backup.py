@@ -134,6 +134,16 @@ def run_daily():
     僵尸自愈：若当天文件存在但校验不过（截断/带脏日志），删掉重做——
     否则 `exists` 短路会让那一天的备份永久停在坏文件上。
     """
+    from . import local_conf
+    chain_mode = (local_conf.get("zcode_incremental") or "").strip().lower() in ("on", "1", "true")
+    if chain_mode:
+        # 新链（paios/zbackup.py）已承担 ZCode 备份：旧日备（每天 1.2GB）+ intraday +
+        # 周异地全部停用；只保留 DSH 日备（它是 DSH base 的来源，与 ZCode 无关）。
+        try:
+            run_dsh_daily()
+        except Exception:
+            pass
+        return "chain-mode"
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
     _clean_stale(BACKUP_DIR)
     dest = BACKUP_DIR / ("db-%s.sqlite" % time.strftime("%Y%m%d"))
@@ -192,6 +202,11 @@ def _offsite():
     是坏的先删再重做。
     """
     import os
+    from . import local_conf
+    # 新链（paios/zbackup.py）自带异地同步（<offsite_dir>\chain）：base 202MB/周 +
+    # delta 几 MB，比每周再拷一份 1.2GB 完整主库省得多 → 旧「日备周拷贝」停用。
+    if (local_conf.get("zcode_incremental") or "").strip().lower() in ("on", "1", "true"):
+        return
     offsite = _offsite_dir()
     if not offsite:
         return
