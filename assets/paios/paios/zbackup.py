@@ -135,6 +135,15 @@ def _con():
     return sqlite3.connect("file:" + str(SOURCE_DB).replace("\\", "/") + "?mode=ro", uri=True)
 
 
+def _source_stat():
+    """主库轻量状态指纹（size + mtime_ns）：多天不用 ZCode 时它完全不变。"""
+    try:
+        st = SOURCE_DB.stat()
+        return {"size": st.st_size, "mtime_ns": st.st_mtime_ns}
+    except OSError:
+        return {}
+
+
 def _table_exists(con, t):
     return con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
                        (t,)).fetchone() is not None
@@ -254,6 +263,7 @@ def make_base(reason=""):
         "counts": {k: v.get("count", 0) for k, v in wm.items()},
         "last_base_ts": int(time.time() * 1000),
         "last_delta_ts": int(time.time() * 1000),
+        "last_source_stat": _source_stat(),
     })
     save_manifest(m)
 
@@ -325,28 +335,11 @@ def _enforce_capacity(max_bytes=None):
             break
 
     if total > cap:
-        m = load_manifest()
-        listed = {os.path.basename(x) for x in (m.get("deltas") or [])}
-        deltas = sorted(DELTA_DIR.glob("delta-*.jsonl.zst"))
-        while total > cap and deltas:
-            p = deltas.pop(0)
-            try:
-                size = p.stat().st_size
-                p.unlink()
-                total -= size
-                dropped_deltas += 1
-                listed.discard(p.name)
-            except OSError:
-                break
-        if dropped_deltas:
-            m["deltas"] = ["delta/" + n for n in sorted(listed)]
-            m["capacity_note"] = {"ts": int(time.time() * 1000),
-                                  "dropped_deltas": dropped_deltas,
-                                  "dropped_bases": dropped_bases,
-                                  "cap": cap}
-            save_manifest(m)
-            _log("capacity: dropped %d deltas (%d bases) to stay under %.1f GB"
-                 % (dropped_deltas, dropped_bases, cap / 1024 ** 3))
+        # 链绝不能断：容量只剩「当前 base + 当前 delta 链」仍然超限时，
+        # 宁可暂时超限 + 告警，也绝不删链中间的 delta（删了恢复必失败）。
+        _log("capacity: current chain %.1fMB still over cap %.1fGB after dropping "
+             "old bases; refusing to drop deltas (would break the chain)"
+             % (total / 1048576, cap / 1024 ** 3))
 
     if dropped_bases or dropped_deltas:
         try:
@@ -370,6 +363,13 @@ def export_delta(label=""):
     m = load_manifest()
     if not m.get("base"):
         return {"ok": False, "error": "no-base"}
+    cur = _source_stat()
+    if cur and m.get("last_source_stat") == cur:
+        # 主库自上次备份以来毫无变化（多天不用 ZCode）→ 不产生空 delta 文件、
+        # 不推进/裁剪任何东西：链与 base 原样保留。否则每天 72 份「0 行」垃圾会
+        # 把旧 delta 挤出保留窗口（2026-10-23 断链事故的同类风险）。
+        return {"ok": True, "action": "no-change",
+                "deltas": len(m.get("deltas") or [])}
     DELTA_DIR.mkdir(parents=True, exist_ok=True)
     wm = m.get("watermark") or {}
 
@@ -484,6 +484,7 @@ def export_delta(label=""):
         "counts": {k: v.get("count", 0) for k, v in new_wm.items()},
         "last_delta_ts": int(time.time() * 1000),
         "schema_fingerprint": fp2,
+        "last_source_stat": cur,
     })
     save_manifest(m)
     _enforce_capacity()
@@ -604,8 +605,13 @@ def run(now=None, force_base=False):
     try:
         m = load_manifest()
         ts = int((now or time.time()) * 1000)
+        cur = _source_stat()
+        # base 只在「主库确实变了」且已过期时才重打：多天不用 ZCode 时主库没变，
+        # 旧 base 与新 base 等价——重打只会白写 200MB，还会把旧 base 轮转出去。
+        src_changed = bool(cur) and m.get("last_source_stat") != cur
         need_base = (force_base or not m.get("base")
-                     or (ts - int(m.get("last_base_ts") or 0)) > BASE_MAX_AGE_S * 1000)
+                     or (src_changed
+                         and (ts - int(m.get("last_base_ts") or 0)) > BASE_MAX_AGE_S * 1000))
         act = "base" if need_base else "delta"
         result = make_base(reason="scheduled" if not m.get("base") else "age") \
             if need_base else export_delta()
